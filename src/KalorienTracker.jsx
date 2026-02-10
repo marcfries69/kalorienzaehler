@@ -238,7 +238,7 @@ const KalorienTracker = () => {
               <Flame className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent">
-              Kalorienzähler
+              Kalorienzähler V1
             </h1>
           </div>
           <p className="text-slate-600">KI-gestützte Nährwertanalyse mit Google Gemini (Kostenlos!)</p>
