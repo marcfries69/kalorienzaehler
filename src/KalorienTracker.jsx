@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Send, Plus, Trash2, TrendingUp, Flame, ChevronDown } from 'lucide-react';
+import { Loader2, Send, Plus, Trash2, TrendingUp, Flame, ChevronDown, Calculator, X, Check } from 'lucide-react';
 
 const KalorienTracker = () => {
   const [meals, setMeals] = useState([]);
@@ -7,10 +7,22 @@ const KalorienTracker = () => {
   const [loading, setLoading] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [expandedMealId, setExpandedMealId] = useState(null);
+  const [calorieGoal, setCalorieGoal] = useState(2000);
+  const [showCalculator, setShowCalculator] = useState(false);
+  const [calculatorData, setCalculatorData] = useState({
+    gender: 'male',
+    age: '',
+    weight: '',
+    height: '',
+    activity: '1.2',
+    goal: 'maintain'
+  });
+  const [calculatedGoal, setCalculatedGoal] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     loadMeals();
+    loadCalorieGoal();
   }, []);
 
   const loadMeals = () => {
@@ -24,6 +36,26 @@ const KalorienTracker = () => {
       console.log('Keine gespeicherten Daten gefunden');
     } finally {
       setLoadingInitial(false);
+    }
+  };
+
+  const loadCalorieGoal = () => {
+    try {
+      const saved = localStorage.getItem('calorie-goal');
+      if (saved) {
+        setCalorieGoal(parseInt(saved));
+      }
+    } catch (error) {
+      console.log('Kein gespeichertes Kalorienziel gefunden');
+    }
+  };
+
+  const saveCalorieGoal = (goal) => {
+    try {
+      localStorage.setItem('calorie-goal', goal.toString());
+      setCalorieGoal(goal);
+    } catch (error) {
+      console.error('Fehler beim Speichern des Ziels:', error);
     }
   };
 
@@ -43,9 +75,50 @@ const KalorienTracker = () => {
     scrollToBottom();
   }, [meals]);
 
+  const calculateCalorieGoal = () => {
+    const { gender, age, weight, height, activity, goal } = calculatorData;
+
+    // Validierung
+    if (!age || !weight || !height) {
+      alert('Bitte fülle alle Felder aus!');
+      return;
+    }
+
+    // Mifflin-St Jeor Formel für BMR (Grundumsatz)
+    let bmr;
+    if (gender === 'male') {
+      bmr = (10 * parseFloat(weight)) + (6.25 * parseFloat(height)) - (5 * parseInt(age)) + 5;
+    } else {
+      bmr = (10 * parseFloat(weight)) + (6.25 * parseFloat(height)) - (5 * parseInt(age)) - 161;
+    }
+
+    // Gesamtumsatz mit Aktivitätsfaktor
+    let tdee = bmr * parseFloat(activity);
+
+    // Anpassung basierend auf Ziel
+    if (goal === 'lose') {
+      tdee -= 500; // 500 kcal Defizit für Abnehmen
+    } else if (goal === 'gain') {
+      tdee += 500; // 500 kcal Überschuss für Zunehmen
+    }
+
+    setCalculatedGoal(Math.round(tdee));
+  };
+
+  const acceptCalculatedGoal = () => {
+    if (calculatedGoal) {
+      saveCalorieGoal(calculatedGoal);
+      setShowCalculator(false);
+      setCalculatedGoal(null);
+    }
+  };
+
+  const rejectCalculatedGoal = () => {
+    setCalculatedGoal(null);
+  };
+
   const analyzeFoodWithGemini = async (foodText) => {
     try {
-      // Rufe Netlify Function auf
       const response = await fetch("/.netlify/functions/analyze-food", {
         method: "POST",
         headers: {
@@ -169,12 +242,21 @@ const KalorienTracker = () => {
             </h1>
           </div>
           <p className="text-slate-600">KI-gestützte Nährwertanalyse mit Google Gemini (Kostenlos!)</p>
-          <button
-            onClick={neuerTag}
-            className="mt-4 px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-medium transition-colors"
-          >
-            Neuer Tag
-          </button>
+          <div className="flex gap-3 justify-center mt-4">
+            <button
+              onClick={neuerTag}
+              className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-medium transition-colors"
+            >
+              Neuer Tag
+            </button>
+            <button
+              onClick={() => setShowCalculator(true)}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
+            >
+              <Calculator className="w-4 h-4" />
+              Kalorienziel berechnen
+            </button>
+          </div>
         </div>
 
         <div className="glass rounded-3xl p-6 mb-6 shadow-xl">
@@ -195,12 +277,12 @@ const KalorienTracker = () => {
             <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
               <div 
                 className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500 ease-out rounded-full"
-                style={{ width: `${Math.min((totals.kcal / 2000) * 100, 100)}%` }}
+                style={{ width: `${Math.min((totals.kcal / calorieGoal) * 100, 100)}%` }}
               ></div>
             </div>
             <div className="flex justify-between mt-2">
               <span className="text-xs text-slate-500 font-medium">0 kcal</span>
-              <span className="text-xs text-slate-500 font-medium">2000 kcal Ziel</span>
+              <span className="text-xs text-slate-500 font-medium">{calorieGoal} kcal Ziel</span>
             </div>
           </div>
 
@@ -210,7 +292,7 @@ const KalorienTracker = () => {
                 <p className="text-orange-600 text-xs font-semibold uppercase tracking-wide mb-1">Gesamtkalorien</p>
                 <p className="text-4xl font-bold text-orange-900 mono">{Math.round(totals.kcal)}</p>
                 <p className="text-sm text-orange-700 mt-1">
-                  {Math.round((totals.kcal / 2000) * 100)}% des Tagesziels
+                  {Math.round((totals.kcal / calorieGoal) * 100)}% des Tagesziels ({calorieGoal} kcal)
                 </p>
               </div>
               <TrendingUp className="w-16 h-16 text-orange-200 opacity-50" />
@@ -273,34 +355,88 @@ const KalorienTracker = () => {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <span className="px-3 py-1 rounded-full bg-gradient-to-r from-orange-500 to-rose-500 text-white text-sm font-semibold mono">{Math.round(meal.kcal)} kcal</span>
+                        {meal.healthScore && (
+                          <span className={`px-3 py-1 rounded-full text-white text-sm font-bold flex items-center gap-1 ${
+                            meal.healthScore <= 2 ? 'bg-gradient-to-r from-green-500 to-emerald-500' :
+                            meal.healthScore <= 4 ? 'bg-gradient-to-r from-yellow-500 to-amber-500' :
+                            'bg-gradient-to-r from-red-500 to-rose-500'
+                          }`}>
+                            <span className="text-xs">❤️</span>
+                            {meal.healthScore}/6
+                          </span>
+                        )}
                         <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium mono">P: {Math.round(meal.protein)}g</span>
                         <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium mono">K: {Math.round(meal.carbs)}g</span>
                         <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono">F: {Math.round(meal.fat)}g</span>
                         <span className="px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium mono">Ballaststoffe: {Math.round(meal.fiber)}g</span>
                       </div>
                     </div>
-                    {isExpanded && meal.components && meal.components.length > 0 && (
+                    {isExpanded && (
                       <div className="border-t border-slate-100 p-4 pt-3 bg-slate-50">
-                        <h5 className="text-sm font-semibold text-slate-600 mb-3 uppercase tracking-wide">Einzelbestandteile</h5>
-                        <div className="space-y-2">
-                          {meal.components.map((component, compIndex) => (
-                            <div key={compIndex} className="bg-white rounded-lg p-3 border border-slate-200">
-                              <div className="flex items-start justify-between mb-2">
-                                <div>
-                                  <p className="font-medium text-slate-800">{component.name}</p>
-                                  <p className="text-xs text-slate-500 mt-0.5">{component.amount}</p>
-                                </div>
-                                <span className="px-2 py-1 rounded-md bg-orange-100 text-orange-700 text-xs font-semibold mono">{Math.round(component.kcal)} kcal</span>
+                        {meal.healthExplanation && (
+                          <div className={`rounded-xl p-4 mb-4 ${
+                            meal.healthScore <= 2 ? 'bg-green-50 border border-green-200' :
+                            meal.healthScore <= 4 ? 'bg-yellow-50 border border-yellow-200' :
+                            'bg-red-50 border border-red-200'
+                          }`}>
+                            <div className="flex items-start gap-3">
+                              <div className={`w-12 h-12 rounded-full flex items-center justify-center text-2xl font-bold text-white flex-shrink-0 ${
+                                meal.healthScore <= 2 ? 'bg-gradient-to-br from-green-500 to-emerald-500' :
+                                meal.healthScore <= 4 ? 'bg-gradient-to-br from-yellow-500 to-amber-500' :
+                                'bg-gradient-to-br from-red-500 to-rose-500'
+                              }`}>
+                                {meal.healthScore}
                               </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 text-xs mono">P: {Math.round(component.protein)}g</span>
-                                <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-600 text-xs mono">K: {Math.round(component.carbs)}g</span>
-                                <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-600 text-xs mono">F: {Math.round(component.fat)}g</span>
-                                <span className="px-2 py-0.5 rounded-md bg-green-50 text-green-600 text-xs mono">Bal: {Math.round(component.fiber)}g</span>
+                              <div className="flex-1">
+                                <h6 className={`font-bold text-sm mb-1 ${
+                                  meal.healthScore <= 2 ? 'text-green-800' :
+                                  meal.healthScore <= 4 ? 'text-yellow-800' :
+                                  'text-red-800'
+                                }`}>
+                                  Gesundheits-Bewertung: {
+                                    meal.healthScore === 1 ? 'Sehr gesund' :
+                                    meal.healthScore === 2 ? 'Gesund' :
+                                    meal.healthScore === 3 ? 'Okay' :
+                                    meal.healthScore === 4 ? 'Weniger gesund' :
+                                    meal.healthScore === 5 ? 'Ungesund' :
+                                    'Sehr ungesund'
+                                  }
+                                </h6>
+                                <p className={`text-sm ${
+                                  meal.healthScore <= 2 ? 'text-green-700' :
+                                  meal.healthScore <= 4 ? 'text-yellow-700' :
+                                  'text-red-700'
+                                }`}>
+                                  {meal.healthExplanation}
+                                </p>
                               </div>
                             </div>
-                          ))}
-                        </div>
+                          </div>
+                        )}
+                        {meal.components && meal.components.length > 0 && (
+                          <>
+                            <h5 className="text-sm font-semibold text-slate-600 mb-3 uppercase tracking-wide">Einzelbestandteile</h5>
+                            <div className="space-y-2">
+                              {meal.components.map((component, compIndex) => (
+                                <div key={compIndex} className="bg-white rounded-lg p-3 border border-slate-200">
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div>
+                                      <p className="font-medium text-slate-800">{component.name}</p>
+                                      <p className="text-xs text-slate-500 mt-0.5">{component.amount}</p>
+                                    </div>
+                                    <span className="px-2 py-1 rounded-md bg-orange-100 text-orange-700 text-xs font-semibold mono">{Math.round(component.kcal)} kcal</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 text-xs mono">P: {Math.round(component.protein)}g</span>
+                                    <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-600 text-xs mono">K: {Math.round(component.carbs)}g</span>
+                                    <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-600 text-xs mono">F: {Math.round(component.fat)}g</span>
+                                    <span className="px-2 py-0.5 rounded-md bg-green-50 text-green-600 text-xs mono">Bal: {Math.round(component.fiber)}g</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -345,6 +481,196 @@ const KalorienTracker = () => {
           </p>
         </div>
       </div>
+
+      {/* Kalorienziel-Rechner Modal */}
+      {showCalculator && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-indigo-500 text-white p-6 rounded-t-3xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Calculator className="w-8 h-8" />
+                <h2 className="text-2xl font-bold">Kalorienziel berechnen</h2>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCalculator(false);
+                  setCalculatedGoal(null);
+                }}
+                className="p-2 hover:bg-white/20 rounded-lg transition"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {!calculatedGoal ? (
+                <div className="space-y-6">
+                  <p className="text-slate-600">
+                    Beantworte die folgenden Fragen, um dein individuelles Kalorienziel zu berechnen.
+                  </p>
+
+                  {/* Geschlecht */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Geschlecht</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => setCalculatorData({...calculatorData, gender: 'male'})}
+                        className={`p-4 rounded-xl border-2 font-medium transition ${
+                          calculatorData.gender === 'male'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        Männlich
+                      </button>
+                      <button
+                        onClick={() => setCalculatorData({...calculatorData, gender: 'female'})}
+                        className={`p-4 rounded-xl border-2 font-medium transition ${
+                          calculatorData.gender === 'female'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        Weiblich
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Alter */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Alter (Jahre)</label>
+                    <input
+                      type="number"
+                      value={calculatorData.age}
+                      onChange={(e) => setCalculatorData({...calculatorData, age: e.target.value})}
+                      placeholder="z.B. 30"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Gewicht */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Gewicht (kg)</label>
+                    <input
+                      type="number"
+                      value={calculatorData.weight}
+                      onChange={(e) => setCalculatorData({...calculatorData, weight: e.target.value})}
+                      placeholder="z.B. 75"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Größe */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Größe (cm)</label>
+                    <input
+                      type="number"
+                      value={calculatorData.height}
+                      onChange={(e) => setCalculatorData({...calculatorData, height: e.target.value})}
+                      placeholder="z.B. 175"
+                      className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Aktivitätslevel */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Aktivitätslevel</label>
+                    <select
+                      value={calculatorData.activity}
+                      onChange={(e) => setCalculatorData({...calculatorData, activity: e.target.value})}
+                      className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none"
+                    >
+                      <option value="1.2">Wenig/kein Sport</option>
+                      <option value="1.375">Leichter Sport (1-3 Tage/Woche)</option>
+                      <option value="1.55">Moderater Sport (3-5 Tage/Woche)</option>
+                      <option value="1.725">Intensiver Sport (6-7 Tage/Woche)</option>
+                      <option value="1.9">Sehr intensiver Sport (2x täglich)</option>
+                    </select>
+                  </div>
+
+                  {/* Ziel */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Dein Ziel</label>
+                    <div className="grid grid-cols-3 gap-3">
+                      <button
+                        onClick={() => setCalculatorData({...calculatorData, goal: 'lose'})}
+                        className={`p-4 rounded-xl border-2 font-medium transition ${
+                          calculatorData.goal === 'lose'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        Abnehmen
+                      </button>
+                      <button
+                        onClick={() => setCalculatorData({...calculatorData, goal: 'maintain'})}
+                        className={`p-4 rounded-xl border-2 font-medium transition ${
+                          calculatorData.goal === 'maintain'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        Halten
+                      </button>
+                      <button
+                        onClick={() => setCalculatorData({...calculatorData, goal: 'gain'})}
+                        className={`p-4 rounded-xl border-2 font-medium transition ${
+                          calculatorData.goal === 'gain'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        Zunehmen
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={calculateCalorieGoal}
+                    className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-bold text-lg shadow-lg transition"
+                  >
+                    Berechnen
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="text-center py-8">
+                    <div className="w-24 h-24 rounded-full bg-gradient-to-br from-green-100 to-emerald-100 mx-auto mb-4 flex items-center justify-center">
+                      <Check className="w-12 h-12 text-green-600" />
+                    </div>
+                    <p className="text-slate-600 mb-2">Dein empfohlenes Kalorienziel:</p>
+                    <p className="text-6xl font-bold text-emerald-600 mono mb-2">{calculatedGoal}</p>
+                    <p className="text-2xl text-slate-700 font-semibold">Kalorien pro Tag</p>
+                  </div>
+
+                  <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
+                    <p className="text-sm text-blue-800">
+                      <strong>Hinweis:</strong> Diese Berechnung basiert auf der Mifflin-St Jeor Formel und berücksichtigt dein Geschlecht, Alter, Gewicht, Größe und Aktivitätslevel.
+                      {calculatorData.goal === 'lose' && ' Zum Abnehmen wurde ein Defizit von 500 kcal eingerechnet.'}
+                      {calculatorData.goal === 'gain' && ' Zum Zunehmen wurde ein Überschuss von 500 kcal eingerechnet.'}
+                    </p>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={rejectCalculatedGoal}
+                      className="flex-1 py-3 rounded-xl border-2 border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold transition"
+                    >
+                      Neu berechnen
+                    </button>
+                    <button
+                      onClick={acceptCalculatedGoal}
+                      className="flex-1 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-bold shadow-lg transition"
+                    >
+                      Übernehmen
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
