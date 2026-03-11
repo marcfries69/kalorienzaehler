@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
-  X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target
+  X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings
 } from 'lucide-react';
 
 const toDateKey = (d) => {
@@ -10,6 +10,12 @@ const toDateKey = (d) => {
 };
 
 const todayKey = toDateKey(new Date());
+
+const DEFAULT_PRESETS = {
+  rest:       { label: 'Rest Day',    emoji: '😴', kcal: 1800, proteinPct: 35, carbsPct: 30, fatPct: 35, fiberG: 25 },
+  active:     { label: 'Active Day',  emoji: '🏃', kcal: 2200, proteinPct: 30, carbsPct: 45, fatPct: 25, fiberG: 30 },
+  veryActive: { label: 'Very Active', emoji: '🔥', kcal: 2700, proteinPct: 25, carbsPct: 55, fatPct: 20, fiberG: 35 },
+};
 
 const KalorienTracker = () => {
   const [history, setHistory] = useState({});
@@ -29,6 +35,11 @@ const KalorienTracker = () => {
   const [macroGoals, setMacroGoals] = useState({ proteinPct: 30, carbsPct: 40, fatPct: 30, fiberG: 30 });
   const [showMacroGoals, setShowMacroGoals] = useState(false);
   const [macroDraft, setMacroDraft] = useState(null);
+  const [presets, setPresets] = useState(DEFAULT_PRESETS);
+  const [activePreset, setActivePreset] = useState(null);
+  const [showPresetSettings, setShowPresetSettings] = useState(false);
+  const [presetDraft, setPresetDraft] = useState(null);
+  const [editingPresetKey, setEditingPresetKey] = useState('rest');
   const messagesEndRef = useRef(null);
 
   // ── Load ────────────────────────────────────────────────────────────────────
@@ -59,6 +70,12 @@ const KalorienTracker = () => {
 
       const savedMacros = localStorage.getItem('macro-goals');
       if (savedMacros) setMacroGoals(JSON.parse(savedMacros));
+
+      const savedPresets = localStorage.getItem('presets-data');
+      if (savedPresets) setPresets(JSON.parse(savedPresets));
+
+      const savedActivePreset = localStorage.getItem('active-preset');
+      if (savedActivePreset) setActivePreset(savedActivePreset);
     } catch (e) {
       console.error('Ladefehler:', e);
     } finally {
@@ -85,6 +102,19 @@ const KalorienTracker = () => {
   const saveMacroGoals = (goals) => {
     setMacroGoals(goals);
     localStorage.setItem('macro-goals', JSON.stringify(goals));
+  };
+
+  const savePresets = (newPresets) => {
+    setPresets(newPresets);
+    localStorage.setItem('presets-data', JSON.stringify(newPresets));
+  };
+
+  const applyPreset = (key) => {
+    const p = presets[key];
+    saveCalorieGoal(p.kcal);
+    saveMacroGoals({ proteinPct: p.proteinPct, carbsPct: p.carbsPct, fatPct: p.fatPct, fiberG: p.fiberG });
+    setActivePreset(key);
+    localStorage.setItem('active-preset', key);
   };
 
   // ── Computed macro goals in grams ────────────────────────────────────────────
@@ -410,6 +440,42 @@ const KalorienTracker = () => {
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
+            </div>
+
+            {/* ── Preset buttons ── */}
+            <div className="glass rounded-2xl p-4 mb-4 shadow-md">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-slate-600 uppercase tracking-wide">Tages-Typ</h3>
+                <button
+                  onClick={() => { setPresetDraft(JSON.parse(JSON.stringify(presets))); setEditingPresetKey('rest'); setShowPresetSettings(true); }}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                  title="Presets anpassen"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex gap-2">
+                {Object.entries(presets).map(([key, p]) => {
+                  const isActive = activePreset === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => applyPreset(key)}
+                      className={`flex-1 py-3 px-2 rounded-xl flex flex-col items-center gap-0.5 transition-all ${
+                        isActive
+                          ? 'bg-gradient-to-br from-emerald-500 to-teal-500 text-white shadow-md scale-[1.02]'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-600 hover:scale-[1.01]'
+                      }`}
+                    >
+                      <span className="text-xl">{p.emoji}</span>
+                      <span className="text-xs font-bold leading-tight">{p.label}</span>
+                      <span className={`text-xs mono font-medium ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
+                        {p.kcal} kcal
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Summary card */}
@@ -970,6 +1036,223 @@ const KalorienTracker = () => {
           </div>
         </div>
       )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* PRESET SETTINGS MODAL                                                    */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {showPresetSettings && presetDraft && (() => {
+        const p = presetDraft[editingPresetKey];
+        const pctSum = p.proteinPct + p.carbsPct + p.fatPct;
+        const isValid = pctSum === 100;
+
+        const grams = {
+          protein: Math.round((p.kcal * p.proteinPct / 100) / 4),
+          carbs:   Math.round((p.kcal * p.carbsPct   / 100) / 4),
+          fat:     Math.round((p.kcal * p.fatPct     / 100) / 9),
+        };
+
+        const allValid = Object.keys(presetDraft).every(k => {
+          const q = presetDraft[k];
+          return q.proteinPct + q.carbsPct + q.fatPct === 100 && q.kcal > 0;
+        });
+
+        const updateP = (field, val) =>
+          setPresetDraft({ ...presetDraft, [editingPresetKey]: { ...p, [field]: val } });
+
+        const presetTabs = [
+          { key: 'rest',       color: 'from-slate-400 to-slate-500'   },
+          { key: 'active',     color: 'from-emerald-500 to-teal-500'  },
+          { key: 'veryActive', color: 'from-orange-500 to-rose-500'   },
+        ];
+
+        const macroRows = [
+          { field: 'proteinPct', label: 'Protein',       color: 'text-blue-600',   bar: 'bg-blue-500',   grams: grams.protein },
+          { field: 'carbsPct',   label: 'Kohlenhydrate', color: 'text-amber-600',  bar: 'bg-amber-500',  grams: grams.carbs   },
+          { field: 'fatPct',     label: 'Fett',          color: 'text-purple-600', bar: 'bg-purple-500', grams: grams.fat     },
+        ];
+
+        return (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+
+              {/* Header */}
+              <div className="sticky top-0 bg-gradient-to-r from-slate-700 to-slate-800 text-white p-5 rounded-t-3xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Settings className="w-6 h-6" />
+                  <h2 className="text-xl font-bold">Presets anpassen</h2>
+                </div>
+                <button onClick={() => setShowPresetSettings(false)} className="p-2 hover:bg-white/20 rounded-lg transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+
+                {/* Preset tabs */}
+                <div className="flex gap-2">
+                  {presetTabs.map(t => {
+                    const pd = presetDraft[t.key];
+                    const tabSum = pd.proteinPct + pd.carbsPct + pd.fatPct;
+                    const tabOk = tabSum === 100 && pd.kcal > 0;
+                    return (
+                      <button
+                        key={t.key}
+                        onClick={() => setEditingPresetKey(t.key)}
+                        className={`flex-1 py-2.5 rounded-xl text-sm font-semibold flex flex-col items-center gap-0.5 transition-all border-2 ${
+                          editingPresetKey === t.key
+                            ? 'border-slate-700 bg-slate-700 text-white'
+                            : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                        }`}
+                      >
+                        <span>{pd.emoji}</span>
+                        <span className="text-xs">{pd.label}</span>
+                        {!tabOk && <span className="text-xs text-red-400">⚠</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Preset name + emoji */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Emoji</label>
+                    <input
+                      type="text"
+                      value={p.emoji}
+                      onChange={(e) => updateP('emoji', e.target.value)}
+                      maxLength={2}
+                      className="w-full text-center text-2xl border-2 border-slate-200 rounded-xl py-2 focus:outline-none focus:border-slate-400"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={p.label}
+                      onChange={(e) => updateP('label', e.target.value)}
+                      className="w-full px-3 py-2 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-slate-400 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                {/* Calories */}
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                  <label className="block text-xs font-semibold text-orange-600 mb-2 uppercase tracking-wide">Kalorienziel</label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => updateP('kcal', Math.max(500, p.kcal - 50))}
+                      className="w-9 h-9 rounded-xl bg-white border border-orange-200 text-orange-600 font-bold hover:bg-orange-50 transition flex items-center justify-center text-lg"
+                    >−</button>
+                    <input
+                      type="number"
+                      value={p.kcal}
+                      onChange={(e) => updateP('kcal', Math.max(0, parseInt(e.target.value) || 0))}
+                      className="flex-1 text-center text-2xl font-bold mono border-2 border-orange-200 rounded-xl py-2 focus:outline-none focus:border-orange-400"
+                    />
+                    <span className="text-orange-600 font-semibold">kcal</span>
+                    <button
+                      onClick={() => updateP('kcal', p.kcal + 50)}
+                      className="w-9 h-9 rounded-xl bg-white border border-orange-200 text-orange-600 font-bold hover:bg-orange-50 transition flex items-center justify-center text-lg"
+                    >+</button>
+                  </div>
+                </div>
+
+                {/* Macro % */}
+                <div className="space-y-3">
+                  {macroRows.map(m => (
+                    <div key={m.field} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <span className={`font-bold text-sm ${m.color}`}>{m.label}</span>
+                          <span className="text-slate-400 text-xs ml-2 mono">→ {m.grams}g · {Math.round(p.kcal * p[m.field] / 100)} kcal</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => updateP(m.field, Math.max(0, p[m.field] - 1))}
+                            className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-500 font-bold hover:bg-slate-100 transition flex items-center justify-center"
+                          >−</button>
+                          <input
+                            type="number"
+                            min="0" max="100"
+                            value={p[m.field]}
+                            onChange={(e) => updateP(m.field, Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                            className="w-12 text-center font-bold border-2 border-slate-200 rounded-lg py-1 focus:outline-none focus:border-slate-400"
+                          />
+                          <span className={`text-xs font-bold ${m.color}`}>%</span>
+                          <button
+                            onClick={() => updateP(m.field, Math.min(100, p[m.field] + 1))}
+                            className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-500 font-bold hover:bg-slate-100 transition flex items-center justify-center"
+                          >+</button>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div className={`h-full ${m.bar} rounded-full transition-all duration-300`} style={{ width: `${p[m.field]}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Sum indicator */}
+                <div className={`rounded-xl p-3 border flex items-center justify-between ${
+                  isValid ? 'bg-green-50 border-green-200' : pctSum > 100 ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'
+                }`}>
+                  <span className={`font-semibold text-sm ${isValid ? 'text-green-700' : pctSum > 100 ? 'text-red-700' : 'text-amber-700'}`}>Gesamt</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xl font-bold mono ${isValid ? 'text-green-700' : pctSum > 100 ? 'text-red-700' : 'text-amber-700'}`}>{pctSum}%</span>
+                    {isValid
+                      ? <span className="text-green-600">✓</span>
+                      : <span className={`text-xs font-medium ${pctSum > 100 ? 'text-red-600' : 'text-amber-600'}`}>
+                          {pctSum > 100 ? `${pctSum - 100}% zu viel` : `${100 - pctSum}% fehlen`}
+                        </span>
+                    }
+                  </div>
+                </div>
+
+                {/* Fiber */}
+                <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                  <label className="block text-xs font-semibold text-green-600 mb-2 uppercase tracking-wide">Ballaststoffe</label>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => updateP('fiberG', Math.max(0, p.fiberG - 1))} className="w-8 h-8 rounded-lg bg-white border border-green-200 text-green-600 font-bold hover:bg-green-50 transition flex items-center justify-center">−</button>
+                    <input
+                      type="number" min="0" value={p.fiberG}
+                      onChange={(e) => updateP('fiberG', Math.max(0, parseInt(e.target.value) || 0))}
+                      className="flex-1 text-center text-xl font-bold mono border-2 border-green-200 rounded-xl py-1.5 focus:outline-none focus:border-green-400"
+                    />
+                    <span className="text-green-600 font-semibold">g</span>
+                    <button onClick={() => updateP('fiberG', p.fiberG + 1)} className="w-8 h-8 rounded-lg bg-white border border-green-200 text-green-600 font-bold hover:bg-green-50 transition flex items-center justify-center">+</button>
+                  </div>
+                </div>
+
+                {/* Reset + Save */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setPresetDraft(JSON.parse(JSON.stringify({ ...presetDraft, [editingPresetKey]: DEFAULT_PRESETS[editingPresetKey] })))}
+                    className="px-4 py-3 rounded-xl border-2 border-slate-200 hover:bg-slate-50 text-slate-600 text-sm font-semibold transition"
+                  >
+                    Zurücksetzen
+                  </button>
+                  <button
+                    disabled={!allValid}
+                    onClick={() => {
+                      savePresets(presetDraft);
+                      // If the currently active preset was edited, re-apply it
+                      if (activePreset) {
+                        const p = presetDraft[activePreset];
+                        saveCalorieGoal(p.kcal);
+                        saveMacroGoals({ proteinPct: p.proteinPct, carbsPct: p.carbsPct, fatPct: p.fatPct, fiberG: p.fiberG });
+                      }
+                      setShowPresetSettings(false);
+                    }}
+                    className="flex-1 py-3 rounded-xl bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 text-white font-bold shadow-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {allValid ? 'Alle Presets speichern' : 'Bitte Werte korrigieren'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {/* MACRO GOALS MODAL                                                        */}
