@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
-  X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp
+  X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target
 } from 'lucide-react';
 
 const toDateKey = (d) => {
@@ -26,6 +26,9 @@ const KalorienTracker = () => {
     gender: 'male', age: '', weight: '', height: '', activity: '1.2', goal: 'maintain'
   });
   const [calculatedGoal, setCalculatedGoal] = useState(null);
+  const [macroGoals, setMacroGoals] = useState({ proteinPct: 30, carbsPct: 40, fatPct: 30, fiberG: 30 });
+  const [showMacroGoals, setShowMacroGoals] = useState(false);
+  const [macroDraft, setMacroDraft] = useState(null);
   const messagesEndRef = useRef(null);
 
   // ── Load ────────────────────────────────────────────────────────────────────
@@ -53,6 +56,9 @@ const KalorienTracker = () => {
 
       const savedGoal = localStorage.getItem('calorie-goal');
       if (savedGoal) setCalorieGoal(parseInt(savedGoal));
+
+      const savedMacros = localStorage.getItem('macro-goals');
+      if (savedMacros) setMacroGoals(JSON.parse(savedMacros));
     } catch (e) {
       console.error('Ladefehler:', e);
     } finally {
@@ -74,6 +80,20 @@ const KalorienTracker = () => {
   const saveCalorieGoal = (goal) => {
     localStorage.setItem('calorie-goal', goal.toString());
     setCalorieGoal(goal);
+  };
+
+  const saveMacroGoals = (goals) => {
+    setMacroGoals(goals);
+    localStorage.setItem('macro-goals', JSON.stringify(goals));
+  };
+
+  // ── Computed macro goals in grams ────────────────────────────────────────────
+  // Protein & Carbs: 4 kcal/g  |  Fat: 9 kcal/g  |  Fiber: fixed grams
+  const macroGoalGrams = {
+    protein: Math.round((calorieGoal * macroGoals.proteinPct / 100) / 4),
+    carbs:   Math.round((calorieGoal * macroGoals.carbsPct  / 100) / 4),
+    fat:     Math.round((calorieGoal * macroGoals.fatPct    / 100) / 9),
+    fiber:   macroGoals.fiberG,
   };
 
   // ── Derived state ────────────────────────────────────────────────────────────
@@ -320,7 +340,14 @@ const KalorienTracker = () => {
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
             >
               <Calculator className="w-4 h-4" />
-              Kalorienziel berechnen
+              Kalorienziel
+            </button>
+            <button
+              onClick={() => { setMacroDraft({ ...macroGoals }); setShowMacroGoals(true); }}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
+            >
+              <Target className="w-4 h-4" />
+              Makroziele
             </button>
           </div>
         </div>
@@ -417,19 +444,37 @@ const KalorienTracker = () => {
                 </div>
               </div>
 
-              {/* Macro cards */}
+              {/* Macro cards with progress */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { label: 'Protein',       value: totals.protein, from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900'   },
-                  { label: 'Kohlenhydrate', value: totals.carbs,   from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900'  },
-                  { label: 'Fett',          value: totals.fat,     from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900' },
-                  { label: 'Ballaststoffe', value: totals.fiber,   from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900'  },
-                ].map(s => (
-                  <div key={s.label} className={`stat-card bg-gradient-to-br ${s.from} ${s.to} rounded-xl p-4 border ${s.border}`}>
-                    <p className={`${s.color} text-xs font-semibold uppercase tracking-wide mb-1`}>{s.label}</p>
-                    <p className={`text-2xl font-bold ${s.num} mono`}>{Math.round(s.value)}g</p>
-                  </div>
-                ))}
+                  { label: 'Protein',       value: totals.protein, goal: macroGoalGrams.protein, bar: 'bg-blue-500',   from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900',   barBg: 'bg-blue-200'   },
+                  { label: 'Kohlenhydrate', value: totals.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-500',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900',  barBg: 'bg-amber-200'  },
+                  { label: 'Fett',          value: totals.fat,     goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200' },
+                  { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900',  barBg: 'bg-green-200'  },
+                ].map(s => {
+                  const pct = Math.min((s.value / s.goal) * 100, 100);
+                  const reached = s.value >= s.goal;
+                  const remaining = Math.round(s.goal - s.value);
+                  return (
+                    <div key={s.label} className={`stat-card bg-gradient-to-br ${s.from} ${s.to} rounded-xl p-4 border ${s.border}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className={`${s.color} text-xs font-semibold uppercase tracking-wide`}>{s.label}</p>
+                        {reached
+                          ? <span className="text-xs text-green-600 font-bold">✓</span>
+                          : <span className={`text-xs ${s.color} opacity-70`}>-{remaining}g</span>
+                        }
+                      </div>
+                      <p className={`text-2xl font-bold ${s.num} mono`}>{Math.round(s.value)}g</p>
+                      <p className={`text-xs ${s.color} opacity-60 mb-2`}>Ziel: {s.goal}g</p>
+                      <div className={`h-1.5 ${s.barBg} rounded-full overflow-hidden`}>
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-green-500' : s.bar}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -925,6 +970,159 @@ const KalorienTracker = () => {
           </div>
         </div>
       )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* MACRO GOALS MODAL                                                        */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {showMacroGoals && macroDraft && (() => {
+        const pctSum = macroDraft.proteinPct + macroDraft.carbsPct + macroDraft.fatPct;
+        const isValid = pctSum === 100;
+
+        const draftGrams = {
+          protein: Math.round((calorieGoal * macroDraft.proteinPct / 100) / 4),
+          carbs:   Math.round((calorieGoal * macroDraft.carbsPct   / 100) / 4),
+          fat:     Math.round((calorieGoal * macroDraft.fatPct     / 100) / 9),
+        };
+        const draftKcal = {
+          protein: Math.round(calorieGoal * macroDraft.proteinPct / 100),
+          carbs:   Math.round(calorieGoal * macroDraft.carbsPct   / 100),
+          fat:     Math.round(calorieGoal * macroDraft.fatPct     / 100),
+        };
+
+        const macroFields = [
+          { key: 'proteinPct', label: 'Protein',       color: 'text-blue-600',   bg: 'bg-blue-500',   light: 'bg-blue-100',   border: 'border-blue-300',   grams: draftGrams.protein, kcal: draftKcal.protein  },
+          { key: 'carbsPct',   label: 'Kohlenhydrate', color: 'text-amber-600',  bg: 'bg-amber-500',  light: 'bg-amber-100',  border: 'border-amber-300',  grams: draftGrams.carbs,   kcal: draftKcal.carbs    },
+          { key: 'fatPct',     label: 'Fett',          color: 'text-purple-600', bg: 'bg-purple-500', light: 'bg-purple-100', border: 'border-purple-300', grams: draftGrams.fat,     kcal: draftKcal.fat      },
+        ];
+
+        return (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-xl w-full max-h-[90vh] overflow-y-auto">
+
+              {/* Header */}
+              <div className="sticky top-0 bg-gradient-to-r from-violet-500 to-purple-500 text-white p-5 rounded-t-3xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Target className="w-7 h-7" />
+                  <h2 className="text-xl font-bold">Makroziele</h2>
+                </div>
+                <button
+                  onClick={() => setShowMacroGoals(false)}
+                  className="p-2 hover:bg-white/20 rounded-lg transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-5">
+
+                {/* Calorie reference */}
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-center justify-between">
+                  <p className="text-sm text-orange-700 font-medium">Basis: Kalorienziel</p>
+                  <p className="text-2xl font-bold mono text-orange-600">{calorieGoal} kcal</p>
+                </div>
+
+                {/* Macro percentage inputs */}
+                {macroFields.map(f => (
+                  <div key={f.key} className={`rounded-xl border ${f.border} p-4 ${f.light}`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <p className={`font-bold ${f.color}`}>{f.label}</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setMacroDraft({ ...macroDraft, [f.key]: Math.max(0, macroDraft[f.key] - 1) })}
+                          className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition flex items-center justify-center"
+                        >−</button>
+                        <input
+                          type="number"
+                          min="0" max="100"
+                          value={macroDraft[f.key]}
+                          onChange={(e) => setMacroDraft({ ...macroDraft, [f.key]: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })}
+                          className="w-14 text-center font-bold text-lg border-2 border-slate-200 rounded-lg py-1 focus:outline-none focus:border-violet-400"
+                        />
+                        <span className={`font-bold ${f.color}`}>%</span>
+                        <button
+                          onClick={() => setMacroDraft({ ...macroDraft, [f.key]: Math.min(100, macroDraft[f.key] + 1) })}
+                          className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition flex items-center justify-center"
+                        >+</button>
+                      </div>
+                    </div>
+                    {/* Progress bar preview */}
+                    <div className="h-2 bg-white/70 rounded-full overflow-hidden mb-2">
+                      <div
+                        className={`h-full ${f.bg} rounded-full transition-all duration-300`}
+                        style={{ width: `${macroDraft[f.key]}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className={`${f.color} font-semibold mono`}>{f.grams}g</span>
+                      <span className={`${f.color} opacity-70`}>{f.kcal} kcal</span>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Sum indicator */}
+                <div className={`rounded-xl p-4 border flex items-center justify-between ${
+                  isValid
+                    ? 'bg-green-50 border-green-200'
+                    : pctSum > 100
+                    ? 'bg-red-50 border-red-200'
+                    : 'bg-amber-50 border-amber-200'
+                }`}>
+                  <p className={`font-semibold text-sm ${isValid ? 'text-green-700' : pctSum > 100 ? 'text-red-700' : 'text-amber-700'}`}>
+                    Gesamt
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-2xl font-bold mono ${isValid ? 'text-green-700' : pctSum > 100 ? 'text-red-700' : 'text-amber-700'}`}>
+                      {pctSum}%
+                    </span>
+                    {isValid
+                      ? <span className="text-green-600 text-lg">✓</span>
+                      : <span className={`text-sm font-medium ${pctSum > 100 ? 'text-red-600' : 'text-amber-600'}`}>
+                          {pctSum > 100 ? `${pctSum - 100}% zu viel` : `${100 - pctSum}% fehlen`}
+                        </span>
+                    }
+                  </div>
+                </div>
+
+                {/* Fiber goal (independent) */}
+                <div className="rounded-xl border border-green-300 bg-green-50 p-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="font-bold text-green-700">Ballaststoffe</p>
+                    <p className="text-xs text-green-600 opacity-70">unabhängig vom Kalorienziel</p>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      onClick={() => setMacroDraft({ ...macroDraft, fiberG: Math.max(0, macroDraft.fiberG - 1) })}
+                      className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition flex items-center justify-center"
+                    >−</button>
+                    <input
+                      type="number"
+                      min="0"
+                      value={macroDraft.fiberG}
+                      onChange={(e) => setMacroDraft({ ...macroDraft, fiberG: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className="w-16 text-center font-bold text-lg border-2 border-slate-200 rounded-lg py-1 focus:outline-none focus:border-green-400"
+                    />
+                    <span className="font-bold text-green-700">g / Tag</span>
+                    <button
+                      onClick={() => setMacroDraft({ ...macroDraft, fiberG: macroDraft.fiberG + 1 })}
+                      className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition flex items-center justify-center"
+                    >+</button>
+                  </div>
+                  <p className="text-xs text-green-600 mt-2">Empfehlung: 25–38g pro Tag</p>
+                </div>
+
+                {/* Save */}
+                <button
+                  disabled={!isValid}
+                  onClick={() => { saveMacroGoals(macroDraft); setShowMacroGoals(false); }}
+                  className="w-full py-4 rounded-xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-bold text-lg shadow-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {isValid ? 'Ziele speichern' : `Noch ${100 - pctSum}% zuweisen`}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
