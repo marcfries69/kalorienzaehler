@@ -6,10 +6,11 @@ import {
 
 const toDateKey = (d) => {
   const date = d instanceof Date ? d : new Date(d);
-  return date.toISOString().split('T')[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
-
-const todayKey = toDateKey(new Date());
 
 const DEFAULT_PRESETS = {
   rest:       { label: 'Rest Day',    emoji: '😴', kcal: 1800, proteinPct: 35, carbsPct: 30, fatPct: 35, fiberG: 25 },
@@ -18,12 +19,15 @@ const DEFAULT_PRESETS = {
 };
 
 const KalorienTracker = () => {
+  const todayKey = toDateKey(new Date());
+
   const [history, setHistory] = useState({});
   const [waterHistory, setWaterHistory] = useState({});
-  const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
   const [activeTab, setActiveTab] = useState('day');
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [expandedMealId, setExpandedMealId] = useState(null);
   const [calorieGoal, setCalorieGoal] = useState(2000);
@@ -200,6 +204,8 @@ const KalorienTracker = () => {
         ...nutrition,
       };
       saveHistory({ ...history, [selectedDate]: [...currentMeals, newMeal] });
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2000);
     } catch (err) {
       alert('Fehler: ' + err.message);
     } finally {
@@ -234,10 +240,8 @@ const KalorienTracker = () => {
 
   const getCurrentMonthDays = () => {
     const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
     return Array.from({ length: now.getDate() }, (_, i) =>
-      `${year}-${month}-${String(i + 1).padStart(2, '0')}`
+      toDateKey(new Date(now.getFullYear(), now.getMonth(), i + 1))
     );
   };
 
@@ -748,6 +752,11 @@ const KalorienTracker = () => {
                     }
                   </button>
                 </div>
+                {savedFlash && (
+                  <p className="text-xs text-emerald-600 font-medium mt-2 text-center animate-pulse">
+                    ✓ Gespeichert
+                  </p>
+                )}
                 <p className="text-xs text-slate-500 mt-2 text-center">
                   KI-gestützte Analyse · Komplett kostenlos mit Google Gemini
                 </p>
