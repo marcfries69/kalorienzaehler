@@ -732,6 +732,76 @@ const KalorienTracker = () => {
               </div>
             </div>
 
+            {/* ── Body snapshot ── */}
+            {bodyMeasurements.length > 0 && (() => {
+              const latest = bodyMeasurements[bodyMeasurements.length - 1];
+              const prev   = bodyMeasurements.length > 1 ? bodyMeasurements[bodyMeasurements.length - 2] : null;
+
+              const trend = (key, lowerIsBetter = false) => {
+                if (!prev || latest[key] == null || prev[key] == null) return null;
+                const diff = latest[key] - prev[key];
+                if (Math.abs(diff) < 0.05) return { arrow: '→', color: 'text-slate-400' };
+                const good = lowerIsBetter ? diff < 0 : diff > 0;
+                return { arrow: diff > 0 ? '↑' : '↓', color: good ? 'text-emerald-500' : 'text-rose-500' };
+              };
+
+              const goalDelta = (key, unit = '', lowerIsBetter = false) => {
+                const val  = latest[key];
+                const goal = bodyGoals[key];
+                if (val == null || goal == null) return null;
+                const diff = val - goal;
+                if (Math.abs(diff) < 0.05) return { label: '✓', color: 'text-emerald-600' };
+                const good = lowerIsBetter ? diff < 0 : diff > 0;
+                return {
+                  label: `${diff > 0 ? '+' : ''}${diff.toFixed(1)}${unit}`,
+                  color: good ? 'text-emerald-600' : 'text-rose-500',
+                };
+              };
+
+              const items = [
+                { key: 'weight',      label: 'Gewicht',  unit: 'kg', lower: false },
+                { key: 'fatPct',      label: 'Fett',     unit: '%',  lower: true  },
+                { key: 'musclePct',   label: 'Muskeln',  unit: '%',  lower: false },
+                { key: 'visceralFat', label: 'VF',       unit: '',   lower: true  },
+              ].filter(i => latest[i.key] != null);
+
+              if (items.length === 0) return null;
+
+              return (
+                <div className="glass rounded-2xl px-4 py-3 mb-4 shadow-md">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      <Scale className="w-3.5 h-3.5" />
+                      Körper · {new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('coach')}
+                      className="text-xs text-violet-500 hover:text-violet-700 font-semibold transition-colors"
+                    >
+                      Details →
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {items.map(({ key, label, unit, lower }) => {
+                      const t = trend(key, lower);
+                      const d = goalDelta(key, unit, lower);
+                      return (
+                        <div key={key} className="text-center">
+                          <p className="text-xs text-slate-400 font-medium mb-0.5">{label}</p>
+                          <div className="flex items-center justify-center gap-0.5">
+                            <span className="text-base font-bold text-slate-800 mono">{latest[key]}</span>
+                            <span className="text-xs text-slate-400">{unit}</span>
+                            {t && <span className={`text-xs font-bold ${t.color}`}>{t.arrow}</span>}
+                          </div>
+                          {d && <p className={`text-xs font-semibold ${d.color} mt-0.5`}>{d.label}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* ── Meals list ── */}
             <div className="glass rounded-3xl p-6 mb-4 shadow-xl min-h-[180px] max-h-[500px] overflow-y-auto">
               <h3 className="text-xl font-bold text-slate-800 mb-4">
