@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
-  X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings
+  X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
+  Brain, Upload, Scale, Dumbbell
 } from 'lucide-react';
 
 const toDateKey = (d) => {
@@ -44,7 +45,23 @@ const KalorienTracker = () => {
   const [showPresetSettings, setShowPresetSettings] = useState(false);
   const [presetDraft, setPresetDraft] = useState(null);
   const [editingPresetKey, setEditingPresetKey] = useState('rest');
+
+  // ── Body Tracking ────────────────────────────────────────────────────────────
+  const [bodyMeasurements, setBodyMeasurements] = useState([]);
+  const [bodyGoals, setBodyGoals] = useState({ weight: null, musclePct: null, fatPct: null, visceralFat: null });
+  const [showBodyModal, setShowBodyModal] = useState(false);
+  const [showBodyGoalsModal, setShowBodyGoalsModal] = useState(false);
+  const [bodyDraft, setBodyDraft] = useState({ date: toDateKey(new Date()), weight: '', fatPct: '', musclePct: '', muscleMassKg: '', visceralFat: '', bmi: '' });
+  const [bodyGoalsDraft, setBodyGoalsDraft] = useState({ weight: '', musclePct: '', fatPct: '', visceralFat: '' });
+  const [bodyInputMode, setBodyInputMode] = useState('manual'); // 'manual' | 'screenshot'
+  const [bodyScreenshotPreview, setBodyScreenshotPreview] = useState(null);
+  const [loadingBody, setLoadingBody] = useState(false);
+  const [showBodyHistory, setShowBodyHistory] = useState(false);
+  const [coachAnalysis, setCoachAnalysis] = useState(null);
+  const [loadingCoach, setLoadingCoach] = useState(false);
+
   const messagesEndRef = useRef(null);
+  const bodyFileRef = useRef(null);
 
   // ── Load ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -80,6 +97,12 @@ const KalorienTracker = () => {
 
       const savedActivePreset = localStorage.getItem('active-preset');
       if (savedActivePreset) setActivePreset(savedActivePreset);
+
+      const savedBodyMeasurements = localStorage.getItem('body-measurements');
+      if (savedBodyMeasurements) setBodyMeasurements(JSON.parse(savedBodyMeasurements));
+
+      const savedBodyGoals = localStorage.getItem('body-goals');
+      if (savedBodyGoals) setBodyGoals(JSON.parse(savedBodyGoals));
     } catch (e) {
       console.error('Ladefehler:', e);
     } finally {
@@ -111,6 +134,16 @@ const KalorienTracker = () => {
   const savePresets = (newPresets) => {
     setPresets(newPresets);
     localStorage.setItem('presets-data', JSON.stringify(newPresets));
+  };
+
+  const saveBodyMeasurements = (data) => {
+    setBodyMeasurements(data);
+    localStorage.setItem('body-measurements', JSON.stringify(data));
+  };
+
+  const saveBodyGoalsData = (goals) => {
+    setBodyGoals(goals);
+    localStorage.setItem('body-goals', JSON.stringify(goals));
   };
 
   const applyPreset = (key) => {
@@ -215,6 +248,93 @@ const KalorienTracker = () => {
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
+  };
+
+  // ── Body Tracking handlers ───────────────────────────────────────────────────
+  const handleBodyScreenshot = async (file) => {
+    if (!file) return;
+    setLoadingBody(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      setBodyScreenshotPreview(dataUrl);
+      const base64 = dataUrl.split(',')[1];
+      const mimeType = file.type || 'image/jpeg';
+      try {
+        const res = await fetch('/.netlify/functions/analyze-body', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: base64, mimeType }),
+        });
+        if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Fehler'); }
+        const extracted = await res.json();
+        setBodyDraft(prev => ({
+          ...prev,
+          weight:      extracted.weight      != null ? String(extracted.weight)      : prev.weight,
+          fatPct:      extracted.fatPct      != null ? String(extracted.fatPct)      : prev.fatPct,
+          musclePct:   extracted.musclePct   != null ? String(extracted.musclePct)   : prev.musclePct,
+          muscleMassKg:extracted.muscleMassKg!= null ? String(extracted.muscleMassKg): prev.muscleMassKg,
+          visceralFat: extracted.visceralFat != null ? String(extracted.visceralFat) : prev.visceralFat,
+          bmi:         extracted.bmi         != null ? String(extracted.bmi)         : prev.bmi,
+        }));
+      } catch (err) {
+        alert('Fehler beim Auslesen: ' + err.message);
+      } finally {
+        setLoadingBody(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const addBodyMeasurement = () => {
+    const entry = {
+      date: bodyDraft.date || toDateKey(new Date()),
+      weight:       bodyDraft.weight       ? parseFloat(bodyDraft.weight)       : null,
+      fatPct:       bodyDraft.fatPct       ? parseFloat(bodyDraft.fatPct)       : null,
+      musclePct:    bodyDraft.musclePct    ? parseFloat(bodyDraft.musclePct)    : null,
+      muscleMassKg: bodyDraft.muscleMassKg ? parseFloat(bodyDraft.muscleMassKg) : null,
+      visceralFat:  bodyDraft.visceralFat  ? parseFloat(bodyDraft.visceralFat)  : null,
+      bmi:          bodyDraft.bmi          ? parseFloat(bodyDraft.bmi)          : null,
+    };
+    const updated = [...bodyMeasurements.filter(m => m.date !== entry.date), entry]
+      .sort((a, b) => a.date.localeCompare(b.date));
+    saveBodyMeasurements(updated);
+    setShowBodyModal(false);
+    setBodyScreenshotPreview(null);
+    setBodyDraft({ date: toDateKey(new Date()), weight: '', fatPct: '', musclePct: '', muscleMassKg: '', visceralFat: '', bmi: '' });
+  };
+
+  const runCoachAnalysis = async () => {
+    setLoadingCoach(true);
+    setCoachAnalysis(null);
+    try {
+      const last14 = [];
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = toDateKey(d);
+        const meals = history[key] || [];
+        if (meals.length > 0) {
+          const totals = meals.reduce((a, m) => ({
+            kcal: a.kcal + (m.kcal || 0), protein: a.protein + (m.protein || 0),
+            carbs: a.carbs + (m.carbs || 0), fat: a.fat + (m.fat || 0), fiber: a.fiber + (m.fiber || 0),
+          }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+          last14.push({ date: key, ...Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Math.round(v)])), mealCount: meals.length });
+        }
+      }
+      const res = await fetch('/.netlify/functions/coach-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nutritionSummary: last14, bodyMeasurements, bodyGoals }),
+      });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Fehler'); }
+      const analysis = await res.json();
+      setCoachAnalysis({ ...analysis, generatedAt: new Date().toLocaleString('de-DE') });
+    } catch (err) {
+      alert('Coach-Analyse Fehler: ' + err.message);
+    } finally {
+      setLoadingCoach(false);
+    }
   };
 
   // ── Calculator ───────────────────────────────────────────────────────────────
@@ -392,6 +512,7 @@ const KalorienTracker = () => {
             { key: 'day',   icon: <Calendar  className="w-4 h-4" />, label: 'Tag'   },
             { key: 'week',  icon: <BarChart2  className="w-4 h-4" />, label: 'Woche' },
             { key: 'month', icon: <TrendingUp className="w-4 h-4" />, label: 'Monat' },
+            { key: 'coach', icon: <Brain      className="w-4 h-4" />, label: 'Coach' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -911,7 +1032,365 @@ const KalorienTracker = () => {
             </>
           );
         })()}
+
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* COACH TAB                                                            */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {activeTab === 'coach' && (() => {
+          const latest = bodyMeasurements.length > 0 ? bodyMeasurements[bodyMeasurements.length - 1] : null;
+          const nutritionDays = Object.keys(history).length;
+
+          const deltaColor = (current, goal, lowerIsBetter = false) => {
+            if (current == null || goal == null) return 'text-slate-400';
+            const diff = current - goal;
+            if (Math.abs(diff) < 0.1) return 'text-emerald-600';
+            const good = lowerIsBetter ? diff < 0 : diff > 0;
+            return good ? 'text-emerald-600' : 'text-rose-500';
+          };
+
+          const deltaLabel = (current, goal, unit = '') => {
+            if (current == null || goal == null) return '–';
+            const diff = current - goal;
+            if (Math.abs(diff) < 0.1) return '✓ Ziel erreicht';
+            return `${diff > 0 ? '+' : ''}${diff.toFixed(1)}${unit} zum Ziel`;
+          };
+
+          const metrics = [
+            { key: 'weight',      label: 'Gewicht',     unit: 'kg', icon: <Scale     className="w-4 h-4" />, lowerIsBetter: false, color: 'from-blue-50 to-blue-100 border-blue-200',       textColor: 'text-blue-700' },
+            { key: 'fatPct',      label: 'Fettanteil',  unit: '%',  icon: <Flame      className="w-4 h-4" />, lowerIsBetter: true,  color: 'from-orange-50 to-orange-100 border-orange-200', textColor: 'text-orange-700' },
+            { key: 'musclePct',   label: 'Muskeln',     unit: '%',  icon: <Dumbbell   className="w-4 h-4" />, lowerIsBetter: false, color: 'from-emerald-50 to-emerald-100 border-emerald-200', textColor: 'text-emerald-700' },
+            { key: 'visceralFat', label: 'Viszerales Fett', unit: '', icon: <Target  className="w-4 h-4" />, lowerIsBetter: true,  color: 'from-rose-50 to-rose-100 border-rose-200',       textColor: 'text-rose-700' },
+          ];
+
+          const canRunCoach = nutritionDays >= 1 && bodyMeasurements.length >= 1;
+
+          return (
+            <>
+              <h2 className="text-2xl font-bold text-slate-800 mb-4 text-center flex items-center justify-center gap-2">
+                <Brain className="w-6 h-6 text-violet-600" /> KI Coach
+              </h2>
+
+              {/* Body Dashboard */}
+              <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-base font-bold text-slate-700">Körperdaten</h3>
+                  <span className="text-xs text-slate-400">
+                    {latest ? new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Keine Messung'}
+                  </span>
+                </div>
+
+                {!latest ? (
+                  <div className="text-center py-6">
+                    <Scale className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    <p className="text-slate-400 text-sm">Noch keine Messung vorhanden</p>
+                    <button
+                      onClick={() => { setBodyDraft({ date: toDateKey(new Date()), weight: '', fatPct: '', musclePct: '', muscleMassKg: '', visceralFat: '', bmi: '' }); setBodyInputMode('manual'); setBodyScreenshotPreview(null); setShowBodyModal(true); }}
+                      className="mt-3 text-xs text-violet-600 font-semibold hover:underline"
+                    >
+                      Erste Messung hinzufügen →
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    {metrics.map(m => {
+                      const val = latest[m.key];
+                      const goal = bodyGoals[m.key];
+                      return (
+                        <div key={m.key} className={`bg-gradient-to-br ${m.color} border rounded-xl p-3`}>
+                          <div className={`flex items-center gap-1.5 ${m.textColor} text-xs font-semibold mb-1`}>
+                            {m.icon} {m.label}
+                          </div>
+                          <div className="flex items-end gap-1">
+                            <span className="text-2xl font-bold text-slate-800 mono">
+                              {val != null ? val : '–'}
+                            </span>
+                            {val != null && <span className="text-sm text-slate-500 mb-0.5">{m.unit}</span>}
+                          </div>
+                          {goal != null && (
+                            <p className="text-xs mt-1">
+                              <span className="text-slate-400">Ziel: {goal}{m.unit} · </span>
+                              <span className={`font-semibold ${deltaColor(val, goal, m.lowerIsBetter)}`}>
+                                {deltaLabel(val, goal, m.unit)}
+                              </span>
+                            </p>
+                          )}
+                          {goal == null && <p className="text-xs text-slate-400 mt-1">Kein Ziel gesetzt</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {latest?.bmi != null && (
+                  <p className="text-center text-xs text-slate-400 mt-3">BMI: <span className="font-semibold text-slate-600">{latest.bmi}</span></p>
+                )}
+              </div>
+
+              {/* Action row */}
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={() => { setBodyDraft({ date: toDateKey(new Date()), weight: '', fatPct: '', musclePct: '', muscleMassKg: '', visceralFat: '', bmi: '' }); setBodyInputMode('manual'); setBodyScreenshotPreview(null); setShowBodyModal(true); }}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-md transition-all"
+                >
+                  <Plus className="w-4 h-4" /> Messung
+                </button>
+                <button
+                  onClick={() => { setBodyGoalsDraft({ weight: bodyGoals.weight ?? '', musclePct: bodyGoals.musclePct ?? '', fatPct: bodyGoals.fatPct ?? '', visceralFat: bodyGoals.visceralFat ?? '' }); setShowBodyGoalsModal(true); }}
+                  className="flex-1 py-2.5 rounded-xl border-2 border-violet-300 text-violet-700 hover:bg-violet-50 text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+                >
+                  <Target className="w-4 h-4" /> Zielwerte
+                </button>
+              </div>
+
+              {/* Measurement history */}
+              {bodyMeasurements.length > 0 && (
+                <div className="glass rounded-2xl p-4 mb-4 shadow-md">
+                  <button
+                    onClick={() => setShowBodyHistory(!showBodyHistory)}
+                    className="w-full flex items-center justify-between text-sm font-semibold text-slate-700"
+                  >
+                    <span>Verlauf ({bodyMeasurements.length} Messungen)</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showBodyHistory ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showBodyHistory && (
+                    <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
+                      {[...bodyMeasurements].reverse().slice(0, 10).map((m, i) => (
+                        <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0">
+                          <span className="text-xs font-medium text-slate-600">
+                            {new Date(m.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })}
+                          </span>
+                          <div className="flex gap-2 text-xs text-slate-500">
+                            {m.weight      != null && <span className="bg-blue-50   text-blue-700   px-2 py-0.5 rounded-full">{m.weight}kg</span>}
+                            {m.fatPct      != null && <span className="bg-orange-50 text-orange-700 px-2 py-0.5 rounded-full">{m.fatPct}%</span>}
+                            {m.musclePct   != null && <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">{m.musclePct}% M</span>}
+                            {m.visceralFat != null && <span className="bg-rose-50   text-rose-700   px-2 py-0.5 rounded-full">VF {m.visceralFat}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* AI Coach */}
+              <div className="glass rounded-3xl p-5 shadow-xl">
+                <div className="flex items-center gap-2 mb-3">
+                  <Brain className="w-5 h-5 text-violet-600" />
+                  <h3 className="text-base font-bold text-slate-700">KI-Analyse</h3>
+                </div>
+
+                {!canRunCoach && (
+                  <p className="text-xs text-slate-400 mb-3">
+                    Mindestens 1 Tag Ernährungsdaten und 1 Körpermessung erforderlich.
+                  </p>
+                )}
+
+                <button
+                  onClick={runCoachAnalysis}
+                  disabled={!canRunCoach || loadingCoach}
+                  className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-500 to-indigo-500 hover:from-violet-600 hover:to-indigo-600 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-md transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {loadingCoach
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Analysiere...</>
+                    : <><Brain className="w-4 h-4" /> Analyse starten</>
+                  }
+                </button>
+
+                {coachAnalysis && (
+                  <div className="mt-4 space-y-3">
+                    <div className="bg-violet-50 border border-violet-200 rounded-xl p-4">
+                      <p className="text-sm text-violet-900 leading-relaxed">{coachAnalysis.summary}</p>
+                    </div>
+                    <div className="space-y-2">
+                      {coachAnalysis.recommendations?.map((rec, i) => {
+                        const colors = {
+                          high:   'border-l-rose-400   bg-rose-50   text-rose-800',
+                          medium: 'border-l-amber-400  bg-amber-50  text-amber-800',
+                          low:    'border-l-emerald-400 bg-emerald-50 text-emerald-800',
+                        };
+                        const cls = colors[rec.priority] || colors.medium;
+                        return (
+                          <div key={i} className={`border-l-4 rounded-r-xl p-3 ${cls}`}>
+                            <p className="font-semibold text-sm">{rec.title}</p>
+                            <p className="text-xs mt-1 leading-relaxed opacity-80">{rec.detail}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-slate-400 text-right">Analyse vom {coachAnalysis.generatedAt}</p>
+                  </div>
+                )}
+              </div>
+            </>
+          );
+        })()}
       </div>
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* BODY MEASUREMENT MODAL                                                   */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {showBodyModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-violet-500 to-purple-500 text-white p-5 rounded-t-3xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Scale className="w-6 h-6" />
+                <h2 className="text-lg font-bold">Messung hinzufügen</h2>
+              </div>
+              <button onClick={() => { setShowBodyModal(false); setBodyScreenshotPreview(null); }} className="p-2 hover:bg-white/20 rounded-lg transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Mode toggle */}
+              <div className="flex gap-2 bg-slate-100 rounded-xl p-1">
+                {[{ key: 'screenshot', label: 'Screenshot', icon: <Upload className="w-4 h-4" /> }, { key: 'manual', label: 'Manuell', icon: <Settings className="w-4 h-4" /> }].map(m => (
+                  <button
+                    key={m.key}
+                    onClick={() => setBodyInputMode(m.key)}
+                    className={`flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all ${bodyInputMode === m.key ? 'bg-white shadow text-violet-700' : 'text-slate-500'}`}
+                  >
+                    {m.icon} {m.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">Datum</label>
+                <input
+                  type="date"
+                  value={bodyDraft.date}
+                  max={toDateKey(new Date())}
+                  onChange={(e) => setBodyDraft({ ...bodyDraft, date: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-200 focus:border-violet-400 focus:outline-none text-sm"
+                />
+              </div>
+
+              {/* Screenshot mode */}
+              {bodyInputMode === 'screenshot' && (
+                <div>
+                  <input
+                    ref={bodyFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleBodyScreenshot(e.target.files?.[0])}
+                  />
+                  <button
+                    onClick={() => bodyFileRef.current?.click()}
+                    disabled={loadingBody}
+                    className="w-full py-3 border-2 border-dashed border-violet-300 rounded-xl text-violet-600 text-sm font-semibold hover:bg-violet-50 transition flex items-center justify-center gap-2"
+                  >
+                    {loadingBody ? <><Loader2 className="w-4 h-4 animate-spin" /> Lese Werte aus...</> : <><Upload className="w-4 h-4" /> Screenshot hochladen</>}
+                  </button>
+                  {bodyScreenshotPreview && (
+                    <img src={bodyScreenshotPreview} alt="Preview" className="mt-2 rounded-xl w-full max-h-40 object-contain bg-slate-50" />
+                  )}
+                  {bodyScreenshotPreview && (
+                    <p className="text-xs text-slate-400 text-center mt-1">Ausgelesene Werte – bitte prüfen und ggf. korrigieren:</p>
+                  )}
+                </div>
+              )}
+
+              {/* Fields */}
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { key: 'weight',       label: 'Gewicht',     unit: 'kg',  placeholder: '75.5' },
+                  { key: 'fatPct',       label: 'Körperfett',  unit: '%',   placeholder: '20.0' },
+                  { key: 'musclePct',    label: 'Muskelmasse', unit: '%',   placeholder: '38.0' },
+                  { key: 'visceralFat',  label: 'Viszerales Fett', unit: '', placeholder: '8'  },
+                  { key: 'muscleMassKg', label: 'Muskeln',     unit: 'kg',  placeholder: '28.5' },
+                  { key: 'bmi',          label: 'BMI',         unit: '',    placeholder: '23.4' },
+                ].map(f => (
+                  <div key={f.key}>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">{f.label} {f.unit && <span className="font-normal text-slate-400">({f.unit})</span>}</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={bodyDraft[f.key]}
+                      onChange={(e) => setBodyDraft({ ...bodyDraft, [f.key]: e.target.value })}
+                      placeholder={f.placeholder}
+                      className="w-full px-3 py-2 rounded-xl border-2 border-slate-200 focus:border-violet-400 focus:outline-none text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <button
+                onClick={addBodyMeasurement}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-bold text-sm shadow-lg transition"
+              >
+                Messung speichern
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* BODY GOALS MODAL                                                         */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {showBodyGoalsModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full">
+            <div className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white p-5 rounded-t-3xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Target className="w-6 h-6" />
+                <h2 className="text-lg font-bold">Zielwerte</h2>
+              </div>
+              <button onClick={() => setShowBodyGoalsModal(false)} className="p-2 hover:bg-white/20 rounded-lg transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {[
+                { key: 'weight',      label: 'Zielgewicht',         unit: 'kg', placeholder: '72.0' },
+                { key: 'fatPct',      label: 'Ziel-Körperfettanteil', unit: '%', placeholder: '18.0' },
+                { key: 'musclePct',   label: 'Ziel-Muskelmasse',    unit: '%', placeholder: '40.0' },
+                { key: 'visceralFat', label: 'Ziel-Viszerales Fett', unit: '',  placeholder: '6'   },
+              ].map(f => (
+                <div key={f.key}>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">{f.label} {f.unit && <span className="font-normal text-slate-400">({f.unit})</span>}</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={bodyGoalsDraft[f.key]}
+                    onChange={(e) => setBodyGoalsDraft({ ...bodyGoalsDraft, [f.key]: e.target.value })}
+                    placeholder={f.placeholder}
+                    className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-200 focus:border-emerald-400 focus:outline-none"
+                  />
+                </div>
+              ))}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowBodyGoalsModal(false)}
+                  className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition text-sm"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  onClick={() => {
+                    saveBodyGoalsData({
+                      weight:      bodyGoalsDraft.weight      ? parseFloat(bodyGoalsDraft.weight)      : null,
+                      fatPct:      bodyGoalsDraft.fatPct      ? parseFloat(bodyGoalsDraft.fatPct)      : null,
+                      musclePct:   bodyGoalsDraft.musclePct   ? parseFloat(bodyGoalsDraft.musclePct)   : null,
+                      visceralFat: bodyGoalsDraft.visceralFat ? parseFloat(bodyGoalsDraft.visceralFat) : null,
+                    });
+                    setShowBodyGoalsModal(false);
+                  }}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold shadow-lg transition text-sm"
+                >
+                  Speichern
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {/* CALCULATOR MODAL                                                         */}
