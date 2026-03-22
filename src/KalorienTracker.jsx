@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
-  Brain, Upload, Scale, Dumbbell
+  Brain, Upload, Scale, Dumbbell, RefreshCw
 } from 'lucide-react';
 
 const toDateKey = (d) => {
@@ -59,6 +59,9 @@ const KalorienTracker = () => {
   const [showBodyHistory, setShowBodyHistory] = useState(false);
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
+  const [syncError, setSyncError] = useState(null);
+  const [lastSyncAt, setLastSyncAt] = useState(() => localStorage.getItem('body-sync-at') || null);
 
   const messagesEndRef = useRef(null);
   const bodyFileRef = useRef(null);
@@ -108,6 +111,34 @@ const KalorienTracker = () => {
     } finally {
       setLoadingInitial(false);
     }
+  }, []);
+
+  // ── Body sync ────────────────────────────────────────────────────────────────
+  const syncBodyData = async (silent = false) => {
+    if (!silent) setSyncStatus('syncing');
+    setSyncError(null);
+    try {
+      const res = await fetch('/.netlify/functions/sync-body');
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Sync fehlgeschlagen');
+      const sorted = [...json.measurements].sort((a, b) => a.date.localeCompare(b.date));
+      localStorage.setItem('body-measurements', JSON.stringify(sorted));
+      localStorage.setItem('body-sync-at', json.syncedAt);
+      setBodyMeasurements(sorted);
+      setLastSyncAt(json.syncedAt);
+      setSyncStatus('ok');
+      setTimeout(() => setSyncStatus(null), 3000);
+    } catch (err) {
+      setSyncStatus('error');
+      setSyncError(err.message);
+    }
+  };
+
+  // Auto-sync on load: if last sync was > 30 min ago (or never)
+  useEffect(() => {
+    const lastSync = localStorage.getItem('body-sync-at');
+    const stale = !lastSync || (Date.now() - new Date(lastSync).getTime()) > 30 * 60 * 1000;
+    if (stale) syncBodyData(true);
   }, []);
 
   // ── Persist ─────────────────────────────────────────────────────────────────
@@ -1233,10 +1264,45 @@ const KalorienTracker = () => {
               <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-base font-bold text-slate-700">Körperdaten</h3>
-                  <span className="text-xs text-slate-400">
-                    {latest ? new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Keine Messung'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {/* Sync status badge */}
+                    {syncStatus === 'syncing' && (
+                      <span className="flex items-center gap-1 text-xs text-violet-500">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Sync…
+                      </span>
+                    )}
+                    {syncStatus === 'ok' && (
+                      <span className="flex items-center gap-1 text-xs text-emerald-600 font-semibold">
+                        <Check className="w-3 h-3" /> Synchronisiert
+                      </span>
+                    )}
+                    {syncStatus === 'error' && (
+                      <span className="text-xs text-rose-500" title={syncError}>⚠ Sync-Fehler</span>
+                    )}
+                    {/* Last sync time */}
+                    {lastSyncAt && syncStatus !== 'syncing' && (
+                      <span className="text-xs text-slate-400">
+                        {new Date(lastSyncAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                    {/* Sync button */}
+                    <button
+                      onClick={() => syncBodyData(false)}
+                      disabled={syncStatus === 'syncing'}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-violet-100 hover:bg-violet-200 text-violet-700 text-xs font-semibold transition-colors disabled:opacity-50"
+                      title="Daten von Blood Analytics laden"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Sync
+                    </button>
+                  </div>
                 </div>
+                {/* Source label */}
+                {latest?.source === 'blood-analytics' && (
+                  <p className="text-xs text-slate-400 mb-3 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-violet-400 inline-block" />
+                    Quelle: Blood Analytics · {latest ? new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                  </p>
+                )}
 
                 {!latest ? (
                   <div className="text-center py-6">
