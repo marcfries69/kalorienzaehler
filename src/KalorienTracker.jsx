@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
-  Brain, Upload, Scale, Dumbbell, RefreshCw
+  Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity
 } from 'lucide-react';
 
 const toDateKey = (d) => {
@@ -61,6 +61,15 @@ const KalorienTracker = () => {
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [syncError, setSyncError] = useState(null);
+  const [trainingDays, setTrainingDays] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('training-days') || '[]'); } catch { return []; }
+  });
+  const [trainingSyncAt, setTrainingSyncAt] = useState(() => localStorage.getItem('training-sync-at') || null);
+  const [kiResult, setKiResult] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ki-result') || 'null'); } catch { return null; }
+  });
+  const [loadingKi, setLoadingKi] = useState(false);
+  const [kiError, setKiError] = useState(null);
   const [lastSyncAt, setLastSyncAt] = useState(() => localStorage.getItem('body-sync-at') || null);
 
   const messagesEndRef = useRef(null);
@@ -138,8 +147,78 @@ const KalorienTracker = () => {
   useEffect(() => {
     const lastSync = localStorage.getItem('body-sync-at');
     const stale = !lastSync || (Date.now() - new Date(lastSync).getTime()) > 30 * 60 * 1000;
-    if (stale) syncBodyData(true);
+    if (stale) {
+      syncBodyData(true);
+      syncTrainingData(true);
+    }
   }, []);
+
+  // ── Training sync ────────────────────────────────────────────────────────────
+  const syncTrainingData = async (silent = false) => {
+    try {
+      const res  = await fetch('/.netlify/functions/sync-training');
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Training-Sync fehlgeschlagen');
+      localStorage.setItem('training-days', JSON.stringify(json.days));
+      localStorage.setItem('training-sync-at', json.syncedAt);
+      setTrainingDays(json.days);
+      setTrainingSyncAt(json.syncedAt);
+    } catch (err) {
+      if (!silent) console.warn('Training sync:', err.message);
+    }
+  };
+
+  // ── KI-Intelligenz ───────────────────────────────────────────────────────────
+  const runKiAdjust = async () => {
+    setLoadingKi(true);
+    setKiError(null);
+    try {
+      // Build nutrition history from stored history (last 14 days)
+      const nutritionHistory = Object.entries(history)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .slice(-14)
+        .map(([date, meals]) => ({
+          date,
+          kcal:    Math.round(meals.reduce((s, m) => s + (m.kcal    || 0), 0)),
+          protein: Math.round(meals.reduce((s, m) => s + (m.protein || 0), 0)),
+          carbs:   Math.round(meals.reduce((s, m) => s + (m.carbs   || 0), 0)),
+          fat:     Math.round(meals.reduce((s, m) => s + (m.fat     || 0), 0)),
+          fiber:   Math.round(meals.reduce((s, m) => s + (m.fiber   || 0), 0)),
+        }))
+        .filter(d => d.kcal > 0);
+
+      const res  = await fetch('/.netlify/functions/ki-adjust', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          bodyMeasurements,
+          bodyGoals,
+          nutritionHistory,
+          trainingDays,
+          currentKcalGoal: calorieGoal,
+          macroGoals,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'KI-Analyse fehlgeschlagen');
+
+      // Apply new goals
+      setCalorieGoal(json.kcalGoal);
+      localStorage.setItem('calorie-goal', String(json.kcalGoal));
+      if (json.macros) {
+        const newMacros = { proteinPct: json.macros.proteinPct, carbsPct: json.macros.carbsPct, fatPct: json.macros.fatPct, fiberG: json.macros.fiberG };
+        setMacroGoals(newMacros);
+        localStorage.setItem('macro-goals', JSON.stringify(newMacros));
+      }
+
+      localStorage.setItem('ki-result', JSON.stringify(json));
+      setKiResult(json);
+    } catch (err) {
+      setKiError(err.message);
+    } finally {
+      setLoadingKi(false);
+    }
+  };
 
   // ── Persist ─────────────────────────────────────────────────────────────────
   const saveHistory = (newHistory) => {
@@ -1365,6 +1444,129 @@ const KalorienTracker = () => {
                 >
                   <Target className="w-4 h-4" /> Zielwerte
                 </button>
+              </div>
+
+              {/* ── KI-Intelligenz ── */}
+              <div className="glass rounded-3xl p-5 mb-4 shadow-xl border border-violet-100">
+                {/* Header */}
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-md">
+                      <Brain className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">KI-Intelligenz</h3>
+                      <p className="text-xs text-slate-400">Körper · Ernährung · Bewegung</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={runKiAdjust}
+                    disabled={loadingKi || bodyMeasurements.length === 0}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold shadow-lg shadow-violet-500/20 transition-all"
+                  >
+                    {loadingKi
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analysiere…</>
+                      : <><Sparkles className="w-3.5 h-3.5" /> Jetzt optimieren</>
+                    }
+                  </button>
+                </div>
+
+                {/* Training summary strip */}
+                {trainingDays.length > 0 && (() => {
+                  const last7 = trainingDays.filter(d => (Date.now() - new Date(d.date + 'T12:00:00').getTime()) / 86400000 <= 7);
+                  return (
+                    <div className="flex items-center gap-3 mb-3 px-3 py-2 bg-slate-50 rounded-xl text-xs text-slate-500">
+                      <Activity className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />
+                      <span>
+                        <span className="font-semibold text-slate-700">{last7.length} Trainingstage</span> letzte 7 Tage ·{' '}
+                        {last7.reduce((s, d) => s + d.totalCalories, 0)} kcal verbrannt ·{' '}
+                        {trainingSyncAt ? `Sync ${new Date(trainingSyncAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                        <button onClick={() => syncTrainingData(false)} className="ml-2 text-violet-500 hover:underline">↻</button>
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* No body data warning */}
+                {bodyMeasurements.length === 0 && (
+                  <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 mb-2">
+                    ⚠ Bitte erst Körperdaten synchronisieren oder Messung hinzufügen.
+                  </p>
+                )}
+
+                {/* KI Error */}
+                {kiError && (
+                  <p className="text-xs text-rose-600 bg-rose-50 rounded-lg px-3 py-2 mb-2">⚠ {kiError}</p>
+                )}
+
+                {/* KI Result */}
+                {kiResult && !loadingKi && (
+                  <div className="space-y-3">
+                    {/* Warnings */}
+                    {kiResult.warnings?.length > 0 && (
+                      <div className="space-y-1">
+                        {kiResult.warnings.map((w, i) => (
+                          <div key={i} className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            <span className="mt-0.5 flex-shrink-0">⚠</span><span>{w}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* New targets */}
+                    <div className="grid grid-cols-4 gap-2">
+                      {[
+                        { label: 'Kalorien', value: `${kiResult.kcalGoal}`, unit: 'kcal', color: 'bg-orange-50 border-orange-200 text-orange-700' },
+                        { label: 'Protein',  value: `${Math.round((kiResult.kcalGoal * (kiResult.macros?.proteinPct||30)/100)/4)}`, unit: 'g', color: 'bg-blue-50 border-blue-200 text-blue-700' },
+                        { label: 'Carbs',    value: `${Math.round((kiResult.kcalGoal * (kiResult.macros?.carbsPct||40)/100)/4)}`,   unit: 'g', color: 'bg-amber-50 border-amber-200 text-amber-700' },
+                        { label: 'Fett',     value: `${Math.round((kiResult.kcalGoal * (kiResult.macros?.fatPct||30)/100)/9)}`,    unit: 'g', color: 'bg-purple-50 border-purple-200 text-purple-700' },
+                      ].map(t => (
+                        <div key={t.label} className={`${t.color} border rounded-xl p-2.5 text-center`}>
+                          <p className="text-xs font-semibold opacity-70 mb-0.5">{t.label}</p>
+                          <p className="text-lg font-bold mono">{t.value}</p>
+                          <p className="text-xs opacity-60">{t.unit}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Stats row */}
+                    <div className="flex gap-2 text-xs text-slate-500">
+                      {kiResult.weeklyDeficit && (
+                        <span className="flex-1 text-center bg-slate-50 rounded-lg py-1.5 px-2">
+                          Defizit <span className="font-semibold text-slate-700">{kiResult.weeklyDeficit} kcal/Wo</span>
+                        </span>
+                      )}
+                      {kiResult.estimatedWeeksToGoal && (
+                        <span className="flex-1 text-center bg-slate-50 rounded-lg py-1.5 px-2">
+                          ~<span className="font-semibold text-slate-700">{kiResult.estimatedWeeksToGoal} Wochen</span> bis Ziel
+                        </span>
+                      )}
+                      {kiResult.trainDayBonus > 0 && (
+                        <span className="flex-1 text-center bg-emerald-50 rounded-lg py-1.5 px-2 text-emerald-700">
+                          +<span className="font-semibold">{kiResult.trainDayBonus}</span> kcal Trainingstag
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Reason */}
+                    {kiResult.adjustmentReason && (
+                      <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 leading-relaxed">
+                        💡 {kiResult.adjustmentReason}
+                      </p>
+                    )}
+
+                    <p className="text-xs text-slate-400 text-right">
+                      ✓ Ziele wurden automatisch angepasst · {kiResult.analyzedAt ? new Date(kiResult.analyzedAt).toLocaleString('de-DE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                    </p>
+                  </div>
+                )}
+
+                {/* Placeholder if no result yet */}
+                {!kiResult && !loadingKi && bodyMeasurements.length > 0 && (
+                  <p className="text-xs text-slate-400 text-center py-2">
+                    Drücke „Jetzt optimieren" um Kalorien- und Makroziele KI-gestützt anzupassen.
+                  </p>
+                )}
               </div>
 
               {/* Measurement history */}
