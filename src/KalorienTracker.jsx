@@ -71,6 +71,7 @@ const KalorienTracker = () => {
   const [loadingKi, setLoadingKi] = useState(false);
   const [kiError, setKiError] = useState(null);
   const [lastSyncAt, setLastSyncAt] = useState(() => localStorage.getItem('body-sync-at') || null);
+  const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
 
   const messagesEndRef = useRef(null);
   const bodyFileRef = useRef(null);
@@ -213,11 +214,61 @@ const KalorienTracker = () => {
 
       localStorage.setItem('ki-result', JSON.stringify(json));
       setKiResult(json);
+      setTodayOptimized(null); // reset day-specific on new base calc
     } catch (err) {
       setKiError(err.message);
     } finally {
       setLoadingKi(false);
     }
+  };
+
+  // ── Optimize today ───────────────────────────────────────────────────────────
+  const optimizeToday = () => {
+    const base     = kiResult?.kcalGoal || calorieGoal;
+    const bonus    = kiResult?.trainDayBonus || 0;
+    const today    = trainingDays.find(d => d.date === todayKey);
+    const alreadyEaten = (history[todayKey] || []).reduce((s, m) => s + (m.kcal || 0), 0);
+
+    let adjustedGoal = base;
+    let trainingBonus = 0;
+    let reasonParts = [];
+
+    // Add training bonus if training happened today
+    if (today && today.totalCalories > 0) {
+      trainingBonus = bonus > 0 ? bonus : Math.min(Math.round(today.totalCalories * 0.3), 300);
+      adjustedGoal += trainingBonus;
+      reasonParts.push(`+${trainingBonus} kcal Trainingstag (${today.totalMinutes} Min, ${today.totalCalories} kcal verbrannt)`);
+    }
+
+    // Carry-over: if yesterday was under/over goal, partially compensate
+    const yesterday = toDateKey(new Date(Date.now() - 86400000));
+    const yesterdayMeals = history[yesterday] || [];
+    if (yesterdayMeals.length > 0) {
+      const yesterdayKcal = Math.round(yesterdayMeals.reduce((s, m) => s + (m.kcal || 0), 0));
+      const delta = yesterdayKcal - base;
+      if (Math.abs(delta) > 100) {
+        const carry = Math.round(delta * -0.25); // compensate 25% of yesterday's delta
+        const cappedCarry = Math.max(-200, Math.min(200, carry));
+        adjustedGoal += cappedCarry;
+        if (cappedCarry !== 0) {
+          reasonParts.push(`${cappedCarry > 0 ? '+' : ''}${cappedCarry} kcal Übertrag (gestern ${delta > 0 ? '+' : ''}${delta} kcal)`);
+        }
+      }
+    }
+
+    adjustedGoal = Math.round(adjustedGoal);
+
+    const remaining = Math.max(0, adjustedGoal - Math.round(alreadyEaten));
+    const reason    = reasonParts.length > 0 ? reasonParts.join(' · ') : 'Kein Training heute, kein Übertrag';
+
+    setTodayOptimized({
+      kcalGoal:      adjustedGoal,
+      bonus:         trainingBonus,
+      remaining,
+      alreadyEaten:  Math.round(alreadyEaten),
+      trainingToday: today || null,
+      reason,
+    });
   };
 
   // ── Persist ─────────────────────────────────────────────────────────────────
@@ -721,9 +772,29 @@ const KalorienTracker = () => {
             </div>
 
             {/* Summary card */}
+            {(() => {
+              const effectiveGoal = (isToday && todayOptimized) ? todayOptimized.kcalGoal : calorieGoal;
+              const isOver = totals.kcal > effectiveGoal;
+              return (
             <div className="glass rounded-3xl p-6 mb-4 shadow-xl">
               <div className="flex items-center justify-between mb-5">
-                <h2 className="text-xl font-bold text-slate-800">Übersicht</h2>
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800">Übersicht</h2>
+                  {isToday && (
+                    <button
+                      onClick={() => { if (todayOptimized) { setTodayOptimized(null); } else { optimizeToday(); } }}
+                      disabled={!kiResult && trainingDays.length === 0}
+                      className={`mt-1 flex items-center gap-1 text-xs font-semibold transition-colors ${
+                        todayOptimized
+                          ? 'text-violet-600 hover:text-violet-800'
+                          : 'text-slate-400 hover:text-violet-600 disabled:opacity-30 disabled:cursor-not-allowed'
+                      }`}
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      {todayOptimized ? `Optimiert (${effectiveGoal} kcal) · zurücksetzen` : 'Heute optimieren'}
+                    </button>
+                  )}
+                </div>
                 <div className="text-right">
                   <p className="text-5xl font-bold mono bg-gradient-to-r from-orange-500 to-rose-500 bg-clip-text text-transparent">
                     {Math.round(totals.kcal)}
@@ -732,23 +803,36 @@ const KalorienTracker = () => {
                 </div>
               </div>
 
+              {/* Today-optimized detail strip */}
+              {isToday && todayOptimized && (
+                <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-violet-50 border border-violet-200 rounded-xl text-xs text-violet-700">
+                  <Sparkles className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="leading-tight">{todayOptimized.reason}</span>
+                </div>
+              )}
+
               {/* Progress bar */}
               <div className="mb-5">
                 <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
                   <div
                     className={`h-full bg-gradient-to-r transition-all duration-500 ease-out rounded-full ${
-                      totals.kcal > calorieGoal ? 'from-red-500 to-rose-500' : 'from-emerald-500 to-teal-500'
+                      isOver ? 'from-red-500 to-rose-500' : 'from-emerald-500 to-teal-500'
                     }`}
-                    style={{ width: `${Math.min((totals.kcal / calorieGoal) * 100, 100)}%` }}
+                    style={{ width: `${Math.min((totals.kcal / effectiveGoal) * 100, 100)}%` }}
                   />
                 </div>
                 <div className="flex justify-between mt-1.5">
                   <span className="text-xs text-slate-500">
-                    {totals.kcal > calorieGoal
-                      ? `${Math.round(totals.kcal - calorieGoal)} kcal über Ziel`
-                      : `${Math.round(calorieGoal - totals.kcal)} kcal verbleibend`}
+                    {isOver
+                      ? `${Math.round(totals.kcal - effectiveGoal)} kcal über Ziel`
+                      : `${Math.round(effectiveGoal - totals.kcal)} kcal verbleibend`}
                   </span>
-                  <span className="text-xs text-slate-500">Ziel: {calorieGoal} kcal</span>
+                  <span className="text-xs text-slate-500">
+                    Ziel: {effectiveGoal} kcal
+                    {isToday && todayOptimized?.bonus > 0 && (
+                      <span className="text-violet-500 ml-1">(+{todayOptimized.bonus} Training)</span>
+                    )}
+                  </span>
                 </div>
               </div>
 
@@ -785,6 +869,8 @@ const KalorienTracker = () => {
                 })}
               </div>
             </div>
+            );
+            })()}
 
             {/* ── Water tracker ── */}
             <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
