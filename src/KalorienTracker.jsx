@@ -384,11 +384,18 @@ const KalorienTracker = () => {
     const waterDays = days.filter(d => (waterHistory[d] || 0) > 0);
     const waterSum = waterDays.reduce((acc, d) => acc + (waterHistory[d] || 0), 0);
 
-    const dayData = days.map(d => ({
-      date: d,
-      kcal: Math.round((history[d] || []).reduce((a, m) => a + (m.kcal || 0), 0)),
-      water: waterHistory[d] || 0,
-    }));
+    const dayData = days.map(d => {
+      const meals = history[d] || [];
+      return {
+        date:    d,
+        kcal:    Math.round(meals.reduce((a, m) => a + (m.kcal    || 0), 0)),
+        protein: Math.round(meals.reduce((a, m) => a + (m.protein || 0), 0)),
+        carbs:   Math.round(meals.reduce((a, m) => a + (m.carbs   || 0), 0)),
+        fat:     Math.round(meals.reduce((a, m) => a + (m.fat     || 0), 0)),
+        fiber:   Math.round(meals.reduce((a, m) => a + (m.fiber   || 0), 0)),
+        water:   waterHistory[d] || 0,
+      };
+    });
 
     const maxKcal = Math.max(...dayData.map(d => d.kcal), calorieGoal, 1);
 
@@ -1006,16 +1013,33 @@ const KalorienTracker = () => {
                       </div>
 
                       {[
-                        { label: 'Protein',       value: stats.avg.protein, from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900'   },
-                        { label: 'Kohlenhydrate', value: stats.avg.carbs,   from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900'  },
-                        { label: 'Fett',          value: stats.avg.fat,     from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900' },
-                        { label: 'Ballaststoffe', value: stats.avg.fiber,   from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900'  },
-                      ].map(s => (
-                        <div key={s.label} className={`bg-gradient-to-br ${s.from} ${s.to} border ${s.border} rounded-xl p-4`}>
-                          <p className={`${s.color} text-xs font-semibold uppercase tracking-wide mb-1`}>{s.label}</p>
-                          <p className={`text-2xl font-bold mono ${s.num}`}>{s.value}g</p>
-                        </div>
-                      ))}
+                        { label: 'Protein',       value: stats.avg.protein, goal: macroGoalGrams.protein, bar: 'bg-blue-400',   barBg: 'bg-blue-100',   from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900'   },
+                        { label: 'Kohlenhydrate', value: stats.avg.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-400',  barBg: 'bg-amber-100',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900'  },
+                        { label: 'Fett',          value: stats.avg.fat,     goal: macroGoalGrams.fat,     bar: 'bg-purple-400', barBg: 'bg-purple-100', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900' },
+                        { label: 'Ballaststoffe', value: stats.avg.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-400',  barBg: 'bg-green-100',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900'  },
+                      ].map(s => {
+                        const pct = Math.min((s.value / s.goal) * 100, 100);
+                        const reached = s.value >= s.goal;
+                        return (
+                          <div key={s.label} className={`bg-gradient-to-br ${s.from} ${s.to} border ${s.border} rounded-xl p-4`}>
+                            <div className="flex items-center justify-between mb-1">
+                              <p className={`${s.color} text-xs font-semibold uppercase tracking-wide`}>{s.label}</p>
+                              {reached
+                                ? <span className="text-xs text-emerald-600 font-bold">✓</span>
+                                : <span className={`text-xs ${s.color} opacity-70`}>-{s.goal - s.value}g</span>
+                              }
+                            </div>
+                            <p className={`text-2xl font-bold mono ${s.num}`}>{s.value}g</p>
+                            <p className={`text-xs ${s.color} opacity-60 mb-1.5`}>Ziel: {s.goal}g</p>
+                            <div className={`h-1.5 ${s.barBg} rounded-full overflow-hidden`}>
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-emerald-400' : s.bar}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
 
                       {/* Water average */}
                       <div className="bg-gradient-to-br from-cyan-50 to-blue-50 border border-cyan-200 rounded-xl p-4">
@@ -1096,6 +1120,71 @@ const KalorienTracker = () => {
                         <span className="text-xs text-slate-400">Über Ziel</span>
                       </div>
                     </div>
+                  </div>
+
+                  {/* ── Macro charts 2×2 ── */}
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    {[
+                      { key: 'protein', label: 'Protein',       goal: macroGoalGrams.protein, unit: 'g', barOn: 'bg-blue-500',   barOff: 'bg-blue-300',   goalLine: 'border-blue-400',   bg: 'bg-blue-50',   border: 'border-blue-200',   title: 'text-blue-700'   },
+                      { key: 'carbs',   label: 'Kohlenhydrate', goal: macroGoalGrams.carbs,   unit: 'g', barOn: 'bg-amber-500',  barOff: 'bg-amber-300',  goalLine: 'border-amber-400',  bg: 'bg-amber-50',  border: 'border-amber-200',  title: 'text-amber-700'  },
+                      { key: 'fat',     label: 'Fett',          goal: macroGoalGrams.fat,     unit: 'g', barOn: 'bg-purple-500', barOff: 'bg-purple-300', goalLine: 'border-purple-400', bg: 'bg-purple-50', border: 'border-purple-200', title: 'text-purple-700' },
+                      { key: 'fiber',   label: 'Ballaststoffe', goal: macroGoalGrams.fiber,   unit: 'g', barOn: 'bg-green-500',  barOff: 'bg-green-300',  goalLine: 'border-green-400',  bg: 'bg-green-50',  border: 'border-green-200',  title: 'text-green-700'  },
+                    ].map(macro => {
+                      const maxVal = Math.max(...stats.dayData.map(d => d[macro.key] || 0), macro.goal, 1);
+                      const goalPct = (macro.goal / maxVal) * 100;
+                      return (
+                        <div key={macro.key} className={`glass rounded-2xl p-4 border ${macro.border}`}>
+                          <div className="flex items-center justify-between mb-3">
+                            <h4 className={`text-sm font-bold ${macro.title}`}>{macro.label}</h4>
+                            <span className="text-xs text-slate-400">Ziel: {macro.goal}{macro.unit}</span>
+                          </div>
+                          <div className="flex items-end gap-0.5" style={{ height: '64px' }}>
+                            {stats.dayData.map(day => {
+                              const val  = day[macro.key] || 0;
+                              const pct  = val > 0 ? (val / maxVal) * 100 : 0;
+                              const over = val > macro.goal;
+                              return (
+                                <div
+                                  key={day.date}
+                                  className="flex-1 relative flex flex-col justify-end cursor-pointer group"
+                                  style={{ height: '56px' }}
+                                  onClick={() => { setSelectedDate(day.date); setActiveTab('day'); }}
+                                >
+                                  {/* goal line */}
+                                  <div
+                                    className={`absolute left-0 right-0 border-t border-dashed ${macro.goalLine} opacity-60 pointer-events-none`}
+                                    style={{ bottom: `${goalPct}%` }}
+                                  />
+                                  {val > 0 ? (
+                                    <div
+                                      className={`w-full rounded-t-sm transition-all group-hover:opacity-70 ${over ? 'bg-red-400' : macro.barOn}`}
+                                      style={{ height: `${pct}%` }}
+                                      title={`${val}${macro.unit}`}
+                                    />
+                                  ) : (
+                                    <div className="w-full h-0.5 bg-slate-200 rounded-full" />
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="flex justify-between mt-1">
+                            {stats.dayData.map((day, i) => (
+                              <span
+                                key={day.date}
+                                className="flex-1 text-center text-slate-400 leading-tight select-none"
+                                style={{ fontSize: isWeek ? '10px' : '8px' }}
+                              >
+                                {isWeek
+                                  ? new Date(day.date + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short' })
+                                  : new Date(day.date + 'T12:00:00').getDate()
+                                }
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </>
               )}
