@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
-  Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity
+  Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const toDateKey = (d) => {
   const date = d instanceof Date ? d : new Date(d);
@@ -12,6 +14,44 @@ const toDateKey = (d) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+// Tiered eat-back: Sportkalorien werden je nach Dauer/Intensität angerechnet.
+// VO2max-Einheiten (jede Dauer):  90%  (hoher Erholungsbedarf)
+// > 120 min:                      88%  (Langstrecke, Schätzung zuverlässiger)
+// 60–120 min:                     70%  (mittlere Unsicherheit)
+// ≤ 60 min, nicht VO2max:         55%  (höchste Inflationsrate bei Schätzwerten)
+const _isRideAct = (a) => {
+  const t = (a.type || a.sport_type || '').toLowerCase();
+  return t.includes('ride') || t.includes('cycling') || t.includes('virtual');
+};
+const _isVo2Act = (a) => _isRideAct(a) && /vo2|intervall|interval|hiit/i.test(a.name || '');
+
+const getEatbackFactor = (training) => {
+  if (!training) return 0.9;
+  const minutes    = training.totalMinutes || 0;
+  const activities = training.activities   || [];
+  if (activities.some(_isVo2Act)) return 0.9;   // VO2max immer 90%
+  if (minutes > 120)              return 0.88;   // Langstrecke 88%
+  if (minutes >= 60)              return 0.70;   // Mittel 70%
+  return 0.55;                                   // Kurz 55%
+};
+
+/** Gibt die anrechenbaren Sportkalorien zurück (tiered eat-back). */
+const tieredEatback = (training) =>
+  Math.round((training?.totalCalories || 0) * getEatbackFactor(training));
+
+// ── Mikronährstoff-Tagesziele (DGE-Referenzwerte) ────────────────────────────
+const MICRO_TARGETS = [
+  { key: 'calcium',    label: 'Kalzium',     unit: 'mg',  goal: 1000, color: 'sky',     emoji: '🦴' },
+  { key: 'iron',       label: 'Eisen',       unit: 'mg',  goal: 14,   color: 'red',     emoji: '🩸' },
+  { key: 'magnesium',  label: 'Magnesium',   unit: 'mg',  goal: 375,  color: 'teal',    emoji: '⚡' },
+  { key: 'zinc',       label: 'Zink',        unit: 'mg',  goal: 10,   color: 'indigo',  emoji: '🔬' },
+  { key: 'potassium',  label: 'Kalium',      unit: 'mg',  goal: 3500, color: 'orange',  emoji: '🍌' },
+  { key: 'vitaminC',   label: 'Vitamin C',   unit: 'mg',  goal: 100,  color: 'yellow',  emoji: '🍊' },
+  { key: 'vitaminD',   label: 'Vitamin D',   unit: 'µg',  goal: 20,   color: 'amber',   emoji: '☀️' },
+  { key: 'vitaminB12', label: 'Vitamin B12', unit: 'µg',  goal: 4,    color: 'violet',  emoji: '💊' },
+  { key: 'folate',     label: 'Folsäure',    unit: 'µg',  goal: 300,  color: 'lime',    emoji: '🥦' },
+];
 
 const DEFAULT_PRESETS = {
   rest:       { label: 'Rest Day',    emoji: '😴', kcal: 1800, proteinPct: 35, carbsPct: 30, fatPct: 35, fiberG: 25 },
@@ -31,7 +71,7 @@ const KalorienTracker = () => {
   const [savedFlash, setSavedFlash] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [expandedMealId, setExpandedMealId] = useState(null);
-  const [calorieGoal, setCalorieGoal] = useState(2000);
+  const [calorieGoal, setCalorieGoal] = useState(1800);
   const [showCalculator, setShowCalculator] = useState(false);
   const [calculatorData, setCalculatorData] = useState({
     gender: 'male', age: '', weight: '', height: '', activity: '1.2', goal: 'maintain'
@@ -39,6 +79,7 @@ const KalorienTracker = () => {
   const [calculatedGoal, setCalculatedGoal] = useState(null);
   const [macroGoals, setMacroGoals] = useState({ proteinPct: 30, carbsPct: 40, fatPct: 30, fiberG: 30 });
   const [showMacroGoals, setShowMacroGoals] = useState(false);
+  const [showMicronutrients, setShowMicronutrients] = useState(false);
   const [macroDraft, setMacroDraft] = useState(null);
   const [presets, setPresets] = useState(DEFAULT_PRESETS);
   const [activePreset, setActivePreset] = useState(null);
@@ -59,19 +100,280 @@ const KalorienTracker = () => {
   const [showBodyHistory, setShowBodyHistory] = useState(false);
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]); // {role:'user'|'assistant', content:string}
+  const [chatInput, setChatInput] = useState('');
+  const [loadingChat, setLoadingChat] = useState(false);
+  const chatEndRef = useRef(null);
+  // Cycling Nutrition
+  const [cyclingBlocks, setCyclingBlocks] = useState([{ zone: 'Z2', minutes: 60 }]);
+  const [cyclingFtp, setCyclingFtp] = useState('');
+  const [cyclingWeight, setCyclingWeight] = useState(''); // leer = aus Körperdaten
+  const [cyclingResult, setCyclingResult] = useState(null);
+  const [loadingCycling, setLoadingCycling] = useState(false);
+  const [cyclingError, setCyclingError] = useState(null);
+  const [loadingRideSync, setLoadingRideSync] = useState(false);
+  const [syncedRide, setSyncedRide] = useState(null); // zuletzt synchronisierte Strava-Einheit
   const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [syncError, setSyncError] = useState(null);
+  const [trainingSyncError, setTrainingSyncError] = useState(null);
   const [trainingDays, setTrainingDays] = useState(() => {
     try { return JSON.parse(localStorage.getItem('training-days') || '[]'); } catch { return []; }
   });
   const [trainingSyncAt, setTrainingSyncAt] = useState(() => localStorage.getItem('training-sync-at') || null);
   const [kiResult, setKiResult] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ki-result') || 'null'); } catch { return null; }
+    try {
+      const r = JSON.parse(localStorage.getItem('ki-result') || 'null');
+      // Discard stale results where calories were null (old bug)
+      if (r && !r.kcalGoalRestDay && !r.kcalGoal) return null;
+      // Invalidate cache if base calorie target changed (now 1800), VO2max field missing,
+      // or rest-day macros are stale (now Carbs 120g / Fett 71g)
+      const staleRestMacros = r?.macroGoalsRestDay && r.macroGoalsRestDay.carbsG !== 120;
+      if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 1800 || !('kcalGoalVo2Day' in r) || staleRestMacros)) {
+        localStorage.removeItem('ki-result');
+        return null;
+      }
+      return r;
+    } catch { return null; }
   });
   const [loadingKi, setLoadingKi] = useState(false);
   const [kiError, setKiError] = useState(null);
   const [lastSyncAt, setLastSyncAt] = useState(() => localStorage.getItem('body-sync-at') || null);
+  const [mealSuggestions, setMealSuggestions] = useState(null);
+  const [loadingMeals, setLoadingMeals] = useState(false);
+  const [mealsError, setMealsError] = useState(null);
+  const [showMealsModal, setShowMealsModal] = useState(false);
   const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
+
+  // ── Auto-computed effective daily goal ───────────────────────────────────────
+  // Formel: BMR + NEAT + TEF − Defizit [+ tatsächliche Strava-Kalorien heute]
+  // Basis (kcalGoalRestDay) kommt vom KI-Backend, Sportkalorien werden live addiert.
+  const effectiveTodayGoal = useMemo(() => {
+    // VO2max-Erkennung: kein Defizit an VO2max-Tagen (volles TDEE als Basis)
+    const todayTraining = trainingDays.find(d => d.date === todayKey);
+    const todayActs = todayTraining?.activities || [];
+    const isRide = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
+    const isVo2 = a => isRide(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
+    const hasTodayVo2max = todayActs.some(isVo2);
+
+    const restBase = hasTodayVo2max
+      ? ((kiResult?.kcalGoalVo2Day > 0 ? kiResult.kcalGoalVo2Day : null) || Math.round((kiResult?.tdeeRestDay||0)) || 2300)
+      : ((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
+          || (calorieGoal > 0 ? calorieGoal : null)
+          || 1800);
+    // Alle Strava-Aktivitäten heute summieren (reagiert auf neue Syncs)
+    // Tiered eat-back: je nach Dauer/Intensität 55–90% der Sportkalorien
+    return restBase + tieredEatback(todayTraining);
+  }, [trainingDays, todayKey, kiResult, calorieGoal]);
+
+  // Sportkalorien-Bonus heute (für Anzeige)
+  const todayTrainingBonus = useMemo(() => {
+    const todayTraining = trainingDays.find(d => d.date === todayKey);
+    // Tiered eat-back je nach Dauer/Intensität
+    return tieredEatback(todayTraining);
+  }, [trainingDays, todayKey]);
+
+  // ── PDF Export (14-Tage-Report) ───────────────────────────────────────────
+  const exportPDF = () => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    doc.setFillColor(20, 184, 166); // teal-500
+    doc.rect(0, 0, pageW, 28, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Ernährungs-Report – 14 Tage', 14, 12);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    const exportDate = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    doc.text(`Exportiert am ${exportDate}`, 14, 22);
+
+    // ── Letzte 14 Tage sammeln ────────────────────────────────────────────────
+    const days14 = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (13 - i));
+      return toDateKey(d);
+    });
+
+    // Körperdaten-Map
+    const bodyMap = {};
+    bodyMeasurements.forEach(m => { bodyMap[m.date] = m; });
+
+    // Strava-Map
+    const stravaMap = {};
+    trainingDays.forEach(t => { stravaMap[t.date] = t; });
+
+    // Tabellenzeilen aufbauen (landscape: A4 quer für mehr Spalten)
+    const kcalBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || 1800;
+    const rowGoals = []; // per-day goal for color coding
+    const rows = days14.map(dateKey => {
+      const meals   = history[dateKey] || [];
+      const kcal    = Math.round(meals.reduce((s, m) => s + (m.kcal    || 0), 0));
+      const prot    = Math.round(meals.reduce((s, m) => s + (m.protein || 0), 0));
+      const carbs   = Math.round(meals.reduce((s, m) => s + (m.carbs   || 0), 0));
+      const fat     = Math.round(meals.reduce((s, m) => s + (m.fat     || 0), 0));
+      const fiber   = Math.round(meals.reduce((s, m) => s + (m.fiber   || 0), 0));
+      const body    = bodyMap[dateKey];
+      const strava  = stravaMap[dateKey];
+      const sportKcal  = strava?.totalCalories || 0;
+      const sportMin   = strava?.totalMinutes  || 0;
+      const sportTypes = strava?.types?.join('+') || '';
+      const dayGoal    = kcalBase + tieredEatback(strava);   // Grundwert + tiered eat-back
+      rowGoals.push(dayGoal);
+      const delta      = kcal ? kcal - dayGoal : null;
+      const deltaLabel = delta !== null ? (delta > 0 ? `+${delta}` : `${delta}`) : '–';
+      const weight  = body?.weight ? `${body.weight}` : '–';
+      const kfa     = body?.fatPct ? `${body.fatPct}%` : '–';
+      const label   = new Date(dateKey + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+      const sportLabel = sportKcal > 0 ? `${sportKcal}\n${sportMin}min${sportTypes ? ' '+sportTypes : ''}` : '–';
+      return [label, kcal || '–', prot || '–', carbs || '–', fat || '–', fiber || '–',
+              sportLabel, dayGoal, deltaLabel, weight, kfa];
+    });
+
+    // Summen / Durchschnitt
+    const tracked = days14.filter(d => (history[d] || []).length > 0);
+    const n = tracked.length || 1;
+    const avg = tracked.reduce((acc, d) => {
+      const meals  = history[d] || [];
+      const strava = stravaMap[d];
+      return {
+        kcal:  acc.kcal  + meals.reduce((s, m) => s + (m.kcal    || 0), 0),
+        prot:  acc.prot  + meals.reduce((s, m) => s + (m.protein || 0), 0),
+        carbs: acc.carbs + meals.reduce((s, m) => s + (m.carbs   || 0), 0),
+        fat:   acc.fat   + meals.reduce((s, m) => s + (m.fat     || 0), 0),
+        fiber: acc.fiber + meals.reduce((s, m) => s + (m.fiber   || 0), 0),
+        sport: acc.sport + (strava?.totalCalories || 0),
+      };
+    }, { kcal: 0, prot: 0, carbs: 0, fat: 0, fiber: 0, sport: 0 });
+
+    // Landscape für mehr Spalten
+    const docL = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWL = docL.internal.pageSize.getWidth();
+
+    // Header
+    docL.setFillColor(20, 184, 166);
+    docL.rect(0, 0, pageWL, 22, 'F');
+    docL.setTextColor(255, 255, 255);
+    docL.setFontSize(16);
+    docL.setFont('helvetica', 'bold');
+    docL.text('Ernährungs- & Trainings-Report – 14 Tage', 14, 10);
+    docL.setFontSize(8);
+    docL.setFont('helvetica', 'normal');
+    docL.text(`Exportiert am ${exportDate}  ·  Kalorienmonitor`, 14, 18);
+
+    // ── Haupttabelle ──────────────────────────────────────────────────────────
+    docL.setTextColor(30, 41, 59);
+    docL.setFontSize(10);
+    docL.setFont('helvetica', 'bold');
+    docL.text('Tagesübersicht', 14, 32);
+
+    autoTable(docL, {
+      startY: 36,
+      head: [['Datum', 'Gegessen\n(kcal)', 'Protein\n(g)', 'Carbs\n(g)', 'Fett\n(g)', 'Faser\n(g)',
+              'Sport\n(kcal/min)', 'Tagesziel\n(kcal)', 'Differenz\n(kcal)', 'Gewicht\n(kg)', 'KFA']],
+      body: rows,
+      foot: [[
+        `Ø ${n} Tage`,
+        Math.round(avg.kcal  / n) || '–',
+        Math.round(avg.prot  / n) || '–',
+        Math.round(avg.carbs / n) || '–',
+        Math.round(avg.fat   / n) || '–',
+        Math.round(avg.fiber / n) || '–',
+        Math.round(avg.sport / n) || '–',
+        `${kcalBase}+Ø${Math.round(avg.sport/n)||0}`,
+        '–', '–', '–'
+      ]],
+      styles:      { fontSize: 7.5, cellPadding: 2 },
+      headStyles:  { fillColor: [20, 184, 166], textColor: 255, fontStyle: 'bold', halign: 'center' },
+      footStyles:  { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 24 },
+        1: { cellWidth: 20, halign: 'right' },
+        2: { cellWidth: 18, halign: 'right' },
+        3: { cellWidth: 18, halign: 'right' },
+        4: { cellWidth: 16, halign: 'right' },
+        5: { cellWidth: 14, halign: 'right' },
+        6: { cellWidth: 28, halign: 'center' },
+        7: { cellWidth: 22, halign: 'right' },
+        8: { cellWidth: 20, halign: 'right' },
+        9: { cellWidth: 20, halign: 'right' },
+        10: { cellWidth: 16, halign: 'right' },
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      didParseCell: (data) => {
+        if (data.section === 'body') {
+          const rowGoal = rowGoals[data.row.index] || kcalBase;
+          // Gegessen: grün wenn ≤ Tagesziel, rot wenn >10% über Ziel
+          if (data.column.index === 1) {
+            const val = Number(String(data.cell.raw).replace(/[^0-9]/g, ''));
+            if (val > rowGoal * 1.1) data.cell.styles.textColor = [239, 68, 68];
+            else if (val > 0 && val <= rowGoal) data.cell.styles.textColor = [22, 163, 74];
+          }
+          // Sport: blau wenn Training vorhanden
+          if (data.column.index === 6 && data.cell.raw !== '–') {
+            data.cell.styles.textColor = [37, 99, 235];
+            data.cell.styles.fontStyle = 'bold';
+          }
+          // Tagesziel: teal-Farbe wenn Trainingstag (Ziel > Basis)
+          if (data.column.index === 7) {
+            if (rowGoal > kcalBase) data.cell.styles.textColor = [5, 150, 105];
+          }
+          // Differenz: grün wenn negativ (unter Ziel), rot wenn positiv (über Ziel)
+          if (data.column.index === 8 && data.cell.raw !== '–') {
+            const raw = String(data.cell.raw);
+            if (raw.startsWith('-')) data.cell.styles.textColor = [22, 163, 74];
+            else if (raw.startsWith('+')) data.cell.styles.textColor = [239, 68, 68];
+          }
+        }
+      },
+    });
+
+    const finalYL = docL.lastAutoTable.finalY + 10;
+
+    // ── Makro-Balken ──────────────────────────────────────────────────────────
+    docL.setFont('helvetica', 'bold');
+    docL.setFontSize(10);
+    docL.setTextColor(30, 41, 59);
+    docL.text('Ø Makro-Verteilung (14 Tage)', 14, finalYL);
+
+    const total = avg.prot + avg.carbs + avg.fat || 1;
+    const pPct  = Math.round(avg.prot  / total * 100);
+    const cPct  = Math.round(avg.carbs / total * 100);
+    const fPct  = 100 - pPct - cPct;
+    const barX  = 14, barY = finalYL + 5, barH = 8, barW = pageWL - 28;
+    const pW = barW * pPct / 100, cW = barW * cPct / 100, fW = barW * fPct / 100;
+
+    docL.setFillColor(59, 130, 246);  docL.rect(barX,        barY, pW, barH, 'F');
+    docL.setFillColor(245, 158, 11);  docL.rect(barX + pW,   barY, cW, barH, 'F');
+    docL.setFillColor(168, 85, 247);  docL.rect(barX+pW+cW,  barY, fW, barH, 'F');
+
+    docL.setFontSize(7.5);
+    docL.setTextColor(255, 255, 255);
+    if (pW > 14) docL.text(`P ${pPct}%`, barX + pW/2,        barY + 5.5, { align: 'center' });
+    if (cW > 14) docL.text(`C ${cPct}%`, barX + pW + cW/2,   barY + 5.5, { align: 'center' });
+    if (fW > 14) docL.text(`F ${fPct}%`, barX+pW+cW + fW/2,  barY + 5.5, { align: 'center' });
+
+    const ly = barY + barH + 7;
+    docL.setTextColor(71, 85, 105);
+    docL.setFontSize(8);
+    docL.setFillColor(59, 130, 246);  docL.rect(14,  ly-3, 5, 4, 'F'); docL.text(`Protein: Ø ${Math.round(avg.prot/n)}g`, 21, ly);
+    docL.setFillColor(245, 158, 11);  docL.rect(80,  ly-3, 5, 4, 'F'); docL.text(`Carbs: Ø ${Math.round(avg.carbs/n)}g`, 87, ly);
+    docL.setFillColor(168, 85, 247);  docL.rect(150, ly-3, 5, 4, 'F'); docL.text(`Fett: Ø ${Math.round(avg.fat/n)}g`, 157, ly);
+    docL.setFillColor(22, 163, 74);   docL.rect(220, ly-3, 5, 4, 'F'); docL.text(`Sport: Ø ${Math.round(avg.sport/n)} kcal/Tag`, 227, ly);
+
+    // Footer
+    const pageHL = docL.internal.pageSize.getHeight();
+    docL.setFontSize(7);
+    docL.setTextColor(148, 163, 184);
+    docL.text('Kalorienmonitor · kalorienmonitor.netlify.app', pageWL / 2, pageHL - 5, { align: 'center' });
+
+    const filename = `ernaehrung-report-${exportDate.replace(/\./g, '-')}.pdf`;
+    docL.save(filename);
+
+    const finalY = doc.lastAutoTable.finalY + 10;
+
+  };
 
   const messagesEndRef = useRef(null);
   const bodyFileRef = useRef(null);
@@ -100,7 +402,16 @@ const KalorienTracker = () => {
       if (savedWater) setWaterHistory(JSON.parse(savedWater));
 
       const savedGoal = localStorage.getItem('calorie-goal');
-      if (savedGoal) setCalorieGoal(parseInt(savedGoal));
+      const parsedGoal = parseInt(savedGoal);
+      // Migrate old base values to current base (1800)
+      if ([2200, 2100, 2000, 1950, 1900].includes(parsedGoal)) {
+        localStorage.setItem('calorie-goal', '1800');
+        setCalorieGoal(1800);
+      } else if (savedGoal && !isNaN(parsedGoal) && parsedGoal > 0) {
+        setCalorieGoal(parsedGoal);
+      }
+      // Clean up stale "null" string from previous KI bug
+      if (savedGoal === 'null' || savedGoal === 'NaN') localStorage.removeItem('calorie-goal');
 
       const savedMacros = localStorage.getItem('macro-goals');
       if (savedMacros) setMacroGoals(JSON.parse(savedMacros));
@@ -116,6 +427,9 @@ const KalorienTracker = () => {
 
       const savedBodyGoals = localStorage.getItem('body-goals');
       if (savedBodyGoals) setBodyGoals(JSON.parse(savedBodyGoals));
+
+      const savedCalcData = localStorage.getItem('calculator-data');
+      if (savedCalcData) setCalculatorData(JSON.parse(savedCalcData));
     } catch (e) {
       console.error('Ladefehler:', e);
     } finally {
@@ -145,99 +459,175 @@ const KalorienTracker = () => {
   };
 
   // Auto-sync on load: if last sync was > 30 min ago (or never)
+  // Auto-sync + auto KI-adjust on load
   useEffect(() => {
-    const lastSync = localStorage.getItem('body-sync-at');
-    const stale = !lastSync || (Date.now() - new Date(lastSync).getTime()) > 30 * 60 * 1000;
-    if (stale) {
-      syncBodyData(true);
-      syncTrainingData(true);
-    }
+    const lastSync  = localStorage.getItem('body-sync-at');
+    const lastKi    = localStorage.getItem('ki-adjusted-at');
+    const syncStale = !lastSync || (Date.now() - new Date(lastSync).getTime()) > 30 * 60 * 1000;
+    const kiStale   = !lastKi  || (Date.now() - new Date(lastKi).getTime())   > 24 * 60 * 60 * 1000;
+
+    const doSync = async () => {
+      if (syncStale) {
+        await Promise.all([syncBodyData(true), syncTrainingData(true)]);
+      }
+      // Auto-run KI after sync if stale (> 24h since last adjust)
+      if (kiStale) {
+        // Small delay to ensure state is populated from sync
+        setTimeout(() => runKiAdjust(true), 2000);
+      }
+    };
+    doSync();
   }, []);
 
   // ── Training sync ────────────────────────────────────────────────────────────
   const syncTrainingData = async (silent = false) => {
+    setTrainingSyncError(null);
     try {
       const res  = await fetch('/.netlify/functions/sync-training');
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Training-Sync fehlgeschlagen');
+      let json;
+      try { json = await res.json(); }
+      catch { throw new Error(`Sync-Training: Server gab kein JSON zurück (Status ${res.status})`); }
+      if (!res.ok) throw new Error(json.error || `Training-Sync fehlgeschlagen (${res.status})`);
+      if (!Array.isArray(json.days)) throw new Error('Unerwartetes Format von sync-training');
       localStorage.setItem('training-days', JSON.stringify(json.days));
       localStorage.setItem('training-sync-at', json.syncedAt);
       setTrainingDays(json.days);
       setTrainingSyncAt(json.syncedAt);
     } catch (err) {
-      if (!silent) console.warn('Training sync:', err.message);
+      setTrainingSyncError(err.message); // always surface error
+      console.warn('Training sync:', err.message);
     }
   };
 
   // ── KI-Intelligenz ───────────────────────────────────────────────────────────
-  const runKiAdjust = async () => {
-    setLoadingKi(true);
+  const runKiAdjust = async (silent = false) => {
+    if (!silent) setLoadingKi(true);
     setKiError(null);
     try {
+      // Always read fresh data from localStorage to avoid stale closure issues
+      const freshBodyMeasurements = (() => { try { return JSON.parse(localStorage.getItem('body-measurements') || '[]'); } catch { return []; } })();
+      const freshTrainingDays     = (() => { try { return JSON.parse(localStorage.getItem('training-days')     || '[]'); } catch { return []; } })();
+      const freshHistory          = (() => { try { return JSON.parse(localStorage.getItem('history-data')      || '{}'); } catch { return {}; } })();
+      const freshBodyGoals        = (() => { try { return JSON.parse(localStorage.getItem('body-goals')        || 'null') || bodyGoals; } catch { return bodyGoals; } })();
+      const freshCalcData         = (() => { try { return JSON.parse(localStorage.getItem('calculator-data')   || 'null') || calculatorData; } catch { return calculatorData; } })();
+      const freshMacroGoals       = (() => { try { return JSON.parse(localStorage.getItem('macro-goals')       || 'null') || macroGoals; } catch { return macroGoals; } })();
+      const freshCalGoal          = (() => { const v = parseInt(localStorage.getItem('calorie-goal')); return v > 0 ? v : calorieGoal; })();
+
       // Build nutrition history from stored history (last 14 days)
-      const nutritionHistory = Object.entries(history)
+      // Only include days with real tracked meals (exclude auto-correction placeholders)
+      const nutritionHistory = Object.entries(freshHistory)
         .sort(([a], [b]) => a.localeCompare(b))
         .slice(-14)
-        .map(([date, meals]) => ({
-          date,
-          kcal:    Math.round(meals.reduce((s, m) => s + (m.kcal    || 0), 0)),
-          protein: Math.round(meals.reduce((s, m) => s + (m.protein || 0), 0)),
-          carbs:   Math.round(meals.reduce((s, m) => s + (m.carbs   || 0), 0)),
-          fat:     Math.round(meals.reduce((s, m) => s + (m.fat     || 0), 0)),
-          fiber:   Math.round(meals.reduce((s, m) => s + (m.fiber   || 0), 0)),
-        }))
-        .filter(d => d.kcal > 0);
+        .map(([date, meals]) => {
+          const realMeals = meals.filter(m => !m.isAutoCorrection);
+          if (realMeals.length === 0) return null; // skip auto-correction-only days
+          return {
+            date,
+            kcal:    Math.round(realMeals.reduce((s, m) => s + (m.kcal    || 0), 0)),
+            protein: Math.round(realMeals.reduce((s, m) => s + (m.protein || 0), 0)),
+            carbs:   Math.round(realMeals.reduce((s, m) => s + (m.carbs   || 0), 0)),
+            fat:     Math.round(realMeals.reduce((s, m) => s + (m.fat     || 0), 0)),
+            fiber:   Math.round(realMeals.reduce((s, m) => s + (m.fiber   || 0), 0)),
+          };
+        })
+        .filter(d => d && d.kcal > 0);
 
       const res  = await fetch('/.netlify/functions/ki-adjust', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          bodyMeasurements,
-          bodyGoals,
+          bodyMeasurements: freshBodyMeasurements,
+          bodyGoals:        freshBodyGoals,
           nutritionHistory,
-          trainingDays,
-          currentKcalGoal: calorieGoal,
-          macroGoals,
+          trainingDays:     freshTrainingDays,
+          currentKcalGoal:  freshCalGoal,
+          macroGoals:       freshMacroGoals,
+          userProfile: {
+            age:           freshCalcData.age    ? +freshCalcData.age    : null,
+            gender:        freshCalcData.gender || 'male',
+            height:        freshCalcData.height ? +freshCalcData.height : null,
+            activityFactor: freshCalcData.activity ? +freshCalcData.activity : 1.375,
+          },
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'KI-Analyse fehlgeschlagen');
 
-      // Apply new goals
-      setCalorieGoal(json.kcalGoal);
-      localStorage.setItem('calorie-goal', String(json.kcalGoal));
+      // Apply new goals — only update if KI returned a valid calorie goal
+      if (json.kcalGoal && json.kcalGoal > 0) {
+        setCalorieGoal(json.kcalGoal);
+        localStorage.setItem('calorie-goal', String(json.kcalGoal));
+      }
       if (json.macros) {
-        const newMacros = { proteinPct: json.macros.proteinPct, carbsPct: json.macros.carbsPct, fatPct: json.macros.fatPct, fiberG: json.macros.fiberG };
+        let macros = { ...json.macros };
+        const kcalBase = json.kcalGoal || 1700;
+        // Protein hard cap: max 170g unabhängig von KI-Ausgabe
+        const maxProteinPct = Math.floor((170 * 4 / kcalBase) * 100);
+        if (macros.proteinPct > maxProteinPct) {
+          const freed = macros.proteinPct - maxProteinPct;
+          macros.proteinPct = maxProteinPct;
+          macros.carbsPct   = (macros.carbsPct || 30) + freed; // freie kcal zu Carbs
+        }
+        // Sicherstellen dass Summe = 100%
+        const total = macros.proteinPct + macros.carbsPct + macros.fatPct;
+        if (total !== 100) macros.carbsPct = Math.max(10, macros.carbsPct + (100 - total));
+        if (json.redSRisk && json.proteinMinG && kcalBase > 0) {
+          // Bei RED-S: Protein-Minimum sicherstellen (aber max 170g)
+          const minProteinPct = Math.ceil((Math.min(json.proteinMinG, 170) * 4 / kcalBase) * 100);
+          if (macros.proteinPct < minProteinPct) {
+            const diff = minProteinPct - macros.proteinPct;
+            macros.proteinPct = minProteinPct;
+            macros.carbsPct   = Math.max(10, (macros.carbsPct || 35) - diff);
+          }
+        }
+        const newMacros = { proteinPct: macros.proteinPct, carbsPct: macros.carbsPct, fatPct: macros.fatPct, fiberG: macros.fiberG };
         setMacroGoals(newMacros);
         localStorage.setItem('macro-goals', JSON.stringify(newMacros));
       }
 
+      const now = new Date().toISOString();
       localStorage.setItem('ki-result', JSON.stringify(json));
+      localStorage.setItem('ki-adjusted-at', now);
       setKiResult(json);
-      setTodayOptimized(null); // reset day-specific on new base calc
+      setTodayOptimized(null);
     } catch (err) {
-      setKiError(err.message);
+      if (!silent) setKiError(err.message);
+      else console.warn('Auto KI-adjust:', err.message);
     } finally {
-      setLoadingKi(false);
+      if (!silent) setLoadingKi(false);
     }
   };
 
   // ── Optimize today ───────────────────────────────────────────────────────────
   const optimizeToday = () => {
-    const base     = kiResult?.kcalGoal || calorieGoal;
-    const bonus    = kiResult?.trainDayBonus || 0;
-    const today    = trainingDays.find(d => d.date === todayKey);
+    const today        = trainingDays.find(d => d.date === todayKey);
     const alreadyEaten = (history[todayKey] || []).reduce((s, m) => s + (m.kcal || 0), 0);
 
-    let adjustedGoal = base;
+    // Use day-type-specific KI goals if available
+    let adjustedGoal;
     let trainingBonus = 0;
-    let reasonParts = [];
+    let reasonParts   = [];
 
-    // Add training bonus if training happened today
     if (today && today.totalCalories > 0) {
-      trainingBonus = bonus > 0 ? bonus : Math.min(Math.round(today.totalCalories * 0.3), 300);
-      adjustedGoal += trainingBonus;
-      reasonParts.push(`+${trainingBonus} kcal Trainingstag (${today.totalMinutes} Min, ${today.totalCalories} kcal verbrannt)`);
+      // Training day: Basis + tatsächliche Strava-Kalorien heute (individuell)
+      // An VO2max-Tagen: volles TDEE als Basis (kein Defizit)
+      const _isRideOpt = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
+      const _isVo2Opt  = a => _isRideOpt(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
+      const todayHasVo2Opt = (today.activities||[]).some(_isVo2Opt);
+      const restBase = todayHasVo2Opt
+        ? ((kiResult?.kcalGoalVo2Day || 0) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : 0) || 2300)
+        : (kiResult?.kcalGoalRestDay || 1800);
+      const rawBurn   = today.totalCalories;
+      const factor    = getEatbackFactor(today);
+      const pctAbzug  = Math.round((1 - factor) * 100);
+      trainingBonus = tieredEatback(today);
+      adjustedGoal  = restBase + trainingBonus;
+      const basisLabel = todayHasVo2Opt ? 'TDEE-Basis (kein Defizit)' : 'Basis';
+      reasonParts.push(`${todayHasVo2Opt ? 'VO2max-Tag' : 'Trainingstag'}: ${adjustedGoal} kcal (${restBase} ${basisLabel} + ${trainingBonus} von ${rawBurn} Strava −${pctAbzug}%, ${today.totalMinutes} Min)`);
+    } else {
+      // Rest day
+      adjustedGoal = kiResult?.kcalGoalRestDay || 1800;
+      reasonParts.push(`Ruhetag: ${adjustedGoal} kcal`);
     }
 
     // Carry-over: if yesterday was under/over goal, partially compensate
@@ -271,10 +661,54 @@ const KalorienTracker = () => {
     });
   };
 
+  // ── Meal suggestions ─────────────────────────────────────────────────────────
+  const suggestMeals = async (remainingKcal, remainingMacros) => {
+    setLoadingMeals(true);
+    setMealsError(null);
+    setMealSuggestions(null);
+    setShowMealsModal(true);
+    try {
+      const res = await fetch('/.netlify/functions/suggest-meals', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          remainingKcal,
+          remainingProtein: remainingMacros.protein,
+          remainingCarbs:   remainingMacros.carbs,
+          remainingFat:     remainingMacros.fat,
+          remainingFiber:   remainingMacros.fiber,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Vorschläge konnten nicht geladen werden');
+      setMealSuggestions(json.meals);
+    } catch (err) {
+      setMealsError(err.message);
+    } finally {
+      setLoadingMeals(false);
+    }
+  };
+
   // ── Persist ─────────────────────────────────────────────────────────────────
   const saveHistory = (newHistory) => {
-    setHistory(newHistory);
-    localStorage.setItem('history-data', JSON.stringify(newHistory));
+    // Auto-clean: past days whose real meals now reach ≥ 1500 kcal lose their correction entry
+    const cleaned = {};
+    for (const [date, meals] of Object.entries(newHistory)) {
+      if (!Array.isArray(meals) || date === todayKey || !meals.some(m => m.isAutoCorrection)) {
+        cleaned[date] = meals;
+        continue;
+      }
+      const realKcal    = meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0);
+      const withoutCorr = meals.filter(m => !m.isAutoCorrection);
+      if (realKcal >= 1500) {
+        if (withoutCorr.length > 0) cleaned[date] = withoutCorr;
+        // else: omit date entirely
+      } else {
+        cleaned[date] = meals;
+      }
+    }
+    setHistory(cleaned);
+    localStorage.setItem('history-data', JSON.stringify(cleaned));
   };
 
   const saveWater = (newWaterHistory) => {
@@ -316,26 +750,58 @@ const KalorienTracker = () => {
   };
 
   // ── Computed macro goals in grams ────────────────────────────────────────────
-  // Protein & Carbs: 4 kcal/g  |  Fat: 9 kcal/g  |  Fiber: fixed grams
-  const macroGoalGrams = {
-    protein: Math.round((calorieGoal * macroGoals.proteinPct / 100) / 4),
-    carbs:   Math.round((calorieGoal * macroGoals.carbsPct  / 100) / 4),
-    fat:     Math.round((calorieGoal * macroGoals.fatPct    / 100) / 9),
-    fiber:   macroGoals.fiberG,
-  };
+  // Carb-Ziele nach Aktivitätstyp:
+  //   Ruhetag / nur Gehen              → 150g
+  //   Laufen oder Krafttraining        → 200g
+  //   Radfahren ≥ 90 min (Zone 2)      → 300g
+  //   Radfahren mit VO2max-Training    → 300g (unabhängig von Dauer)
+  // Protein: 170g immer
+  const todayTrainingEntry = trainingDays.find(d => d.date === todayKey);
+  const todayActivities    = todayTrainingEntry?.activities || [];
+  const todayHasStrength   = todayTrainingEntry?.types?.includes('strength') ?? false;
+  const todayHasRun        = todayActivities.some(a => (a.type||'').toLowerCase().includes('run'));
+  const isRideActivity     = a => { const t = (a.type||'').toLowerCase(); return t.includes('ride') || t.includes('cycling') || t.includes('virtual'); };
+  const isVo2maxRide       = a => isRideActivity(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
+  const todayLongRide      = todayActivities.some(a => isRideActivity(a) && (a.minutes||0) >= 90);
+  const todayVo2maxRide    = todayActivities.some(isVo2maxRide);
+  const todayIsTrainingDay = todayHasStrength || todayHasRun || todayLongRide || todayVo2maxRide;
+
+  const macroGoalGrams = (() => {
+    let carbs, fat;
+    if (todayLongRide || todayVo2maxRide)     { carbs = 300; fat = 85; } // Zone 2 ≥90 min oder VO2max
+    else if (todayHasRun || todayHasStrength) { carbs = 200; fat = 85; }
+    else                                      { carbs = 120; fat = 71; } // Ruhetag/Gehen → passt auf 1800 kcal
+    return { protein: 170, carbs, fat, fiber: 35 };
+  })();
 
   // ── Derived state ────────────────────────────────────────────────────────────
   const currentMeals = history[selectedDate] || [];
   const currentWater = waterHistory[selectedDate] || 0;
   const isToday = selectedDate === todayKey;
 
-  const totals = currentMeals.reduce((acc, meal) => ({
-    kcal: acc.kcal + (meal.kcal || 0),
-    protein: acc.protein + (meal.protein || 0),
-    carbs: acc.carbs + (meal.carbs || 0),
-    fat: acc.fat + (meal.fat || 0),
-    fiber: acc.fiber + (meal.fiber || 0),
-  }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+  const totals = currentMeals.reduce((acc, meal) => {
+    const mn = meal.micronutrients || {};
+    return {
+      kcal:    acc.kcal    + (meal.kcal    || 0),
+      protein: acc.protein + (meal.protein || 0),
+      carbs:   acc.carbs   + (meal.carbs   || 0),
+      fat:     acc.fat     + (meal.fat     || 0),
+      fiber:   acc.fiber   + (meal.fiber   || 0),
+      calcium:    acc.calcium    + (mn.calcium    || 0),
+      iron:       acc.iron       + (mn.iron       || 0),
+      magnesium:  acc.magnesium  + (mn.magnesium  || 0),
+      zinc:       acc.zinc       + (mn.zinc       || 0),
+      potassium:  acc.potassium  + (mn.potassium  || 0),
+      vitaminC:   acc.vitaminC   + (mn.vitaminC   || 0),
+      vitaminD:   acc.vitaminD   + (mn.vitaminD   || 0),
+      vitaminB12: acc.vitaminB12 + (mn.vitaminB12 || 0),
+      folate:     acc.folate     + (mn.folate     || 0),
+    };
+  }, { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0,
+       calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0,
+       vitaminC: 0, vitaminD: 0, vitaminB12: 0, folate: 0 });
+  // Whether at least one meal today has micronutrient data
+  const hasMicroData = currentMeals.some(m => m.micronutrients);
 
   // ── Date navigation ──────────────────────────────────────────────────────────
   const navigateDay = (dir) => {
@@ -357,6 +823,71 @@ const KalorienTracker = () => {
   useEffect(() => {
     if (activeTab === 'day') messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history]);
+
+  // ── Auto-backfill: Tage < 1500 kcal erhalten Tagesziel als Korrektureintrag ─
+  // Läuft auch ohne kiResult (Fallback auf calorieGoal/1800), wird erneut ausgeführt
+  // wenn kiResult verfügbar wird (z.B. nach ki-adjust API-Aufruf).
+  useEffect(() => {
+    const restBase  = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
+    const vo2Base   = (kiResult?.kcalGoalVo2Day  > 0 ? kiResult.kcalGoalVo2Day  : null)
+                   || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : restBase + 400);
+    const isRideAct = a => { const t = (a.type || '').toLowerCase(); return t.includes('ride') || t.includes('cycling') || t.includes('virtual'); };
+    const isVo2Act  = a => isRideAct(a) && /vo2|intervall|interval|hiit/i.test(a.name || '');
+
+    let freshHistory;
+    try { freshHistory = JSON.parse(localStorage.getItem('history-data') || '{}'); } catch { return; }
+
+    let changed = false;
+    for (let i = 1; i <= 30; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateKey    = toDateKey(d);
+      const dayMeals   = Array.isArray(freshHistory[dateKey]) ? freshHistory[dateKey] : [];
+      const realKcal   = dayMeals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0);
+      const hasCorr    = dayMeals.some(m => m.isAutoCorrection);
+
+      if (realKcal >= 1500) {
+        // Real meals sufficient – remove any stale correction
+        if (hasCorr) {
+          const cleaned = dayMeals.filter(m => !m.isAutoCorrection);
+          if (cleaned.length > 0) freshHistory[dateKey] = cleaned;
+          else delete freshHistory[dateKey];
+          changed = true;
+        }
+      } else {
+        // Below threshold – add/update correction entry
+        const training = trainingDays.find(t => t.date === dateKey);
+        const dayBase  = training?.activities?.some(isVo2Act) ? vo2Base : restBase;
+        const dayGoal  = dayBase + tieredEatback(training);
+        const existing = dayMeals.find(m => m.isAutoCorrection);
+
+        if (!existing || existing.kcal !== dayGoal) {
+          freshHistory[dateKey] = [
+            ...dayMeals.filter(m => !m.isAutoCorrection),
+            {
+              id:              `auto-correction-${dateKey}`,
+              name:            'Tagesziel (nicht erfasst)',
+              kcal:            dayGoal,
+              protein:         0,
+              carbs:           0,
+              fat:             0,
+              fiber:           0,
+              healthScore:     null,
+              isAutoCorrection: true,
+              correctedAt:     new Date().toISOString(),
+            },
+          ];
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      localStorage.setItem('history-data', JSON.stringify(freshHistory));
+      setHistory(freshHistory);
+    }
+  }, [kiResult, trainingDays, calorieGoal]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // ── Water ────────────────────────────────────────────────────────────────────
   const addWater = (amount) => {
@@ -475,12 +1006,13 @@ const KalorienTracker = () => {
         d.setDate(d.getDate() - i);
         const key = toDateKey(d);
         const meals = history[key] || [];
-        if (meals.length > 0) {
-          const totals = meals.reduce((a, m) => ({
+        const realMeals = meals.filter(m => !m.isAutoCorrection);
+        if (realMeals.length > 0) {
+          const totals = realMeals.reduce((a, m) => ({
             kcal: a.kcal + (m.kcal || 0), protein: a.protein + (m.protein || 0),
             carbs: a.carbs + (m.carbs || 0), fat: a.fat + (m.fat || 0), fiber: a.fiber + (m.fiber || 0),
           }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
-          last14.push({ date: key, ...Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Math.round(v)])), mealCount: meals.length });
+          last14.push({ date: key, ...Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Math.round(v)])), mealCount: realMeals.length });
         }
       }
       const res = await fetch('/.netlify/functions/coach-analysis', {
@@ -498,6 +1030,155 @@ const KalorienTracker = () => {
     }
   };
 
+  // ── Coach Chat ───────────────────────────────────────────────────────────────
+  const sendChatMessage = async (overrideText) => {
+    const text = (overrideText ?? chatInput).trim();
+    if (!text || loadingChat) return;
+    setChatInput('');
+
+    const userMsg = { role: 'user', content: text };
+    const updatedMessages = [...chatMessages, userMsg];
+    setChatMessages(updatedMessages);
+    setLoadingChat(true);
+
+    // Scroll to bottom
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+
+    try {
+      // Ernährungskontext letzte 14 Tage aufbauen
+      // Auto-Korrektur-Tage werden als "geschätzt" markiert (Makros fehlen)
+      const last14 = [];
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const key = toDateKey(d);
+        const meals = history[key] || [];
+        const realMeals = meals.filter(m => !m.isAutoCorrection);
+        const isCorrected = meals.some(m => m.isAutoCorrection);
+        if (realMeals.length > 0) {
+          const t = realMeals.reduce((a, m) => ({
+            kcal: a.kcal + (m.kcal || 0), protein: a.protein + (m.protein || 0),
+            carbs: a.carbs + (m.carbs || 0), fat: a.fat + (m.fat || 0), fiber: a.fiber + (m.fiber || 0),
+          }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+          last14.push({ date: key, ...Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v)])) });
+        } else if (isCorrected) {
+          // Tag nicht erfasst – nur Kaloriengeschätzwert, keine Makros
+          const corrKcal = meals.find(m => m.isAutoCorrection)?.kcal || 0;
+          last14.push({ date: key, kcal: corrKcal, protein: null, carbs: null, fat: null, fiber: null, estimated: true });
+        }
+      }
+      const todayMeals = history[todayKey]?.filter(m => !m.isAutoCorrection) || [];
+
+      const res = await fetch('/.netlify/functions/coach-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          context: {
+            nutritionHistory: last14,
+            bodyMeasurements,
+            bodyGoals,
+            trainingDays,
+            calorieGoalRest: kiResult?.kcalGoalRestDay || calorieGoal || 1800,
+            macroGoals: kiResult,
+            todayDate: todayKey,
+            todayMeals,
+          },
+        }),
+      });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Fehler'); }
+      const { reply } = await res.json();
+      setChatMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `⚠️ Fehler: ${err.message}` }]);
+    } finally {
+      setLoadingChat(false);
+    }
+  };
+
+  // ── Cycling Nutrition ────────────────────────────────────────────────────────
+  const calcCyclingNutrition = async () => {
+    if (cyclingBlocks.length === 0 || cyclingBlocks.every(b => !b.minutes)) return;
+    setLoadingCycling(true);
+    setCyclingError(null);
+    setCyclingResult(null);
+    try {
+      const latest = bodyMeasurements[bodyMeasurements.length - 1];
+      const weightKg = cyclingWeight ? +cyclingWeight : (latest?.weight || 75);
+      const res = await fetch('/.netlify/functions/cycling-nutrition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blocks: cyclingBlocks.filter(b => b.minutes > 0),
+          weightKg,
+          ftpWatts: cyclingFtp ? +cyclingFtp : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Fehler');
+      setCyclingResult(data);
+    } catch (err) {
+      setCyclingError(err.message);
+    } finally {
+      setLoadingCycling(false);
+    }
+  };
+
+  // Holt die zuletzt absolvierte Strava-Rad-Einheit und passt den Recovery-Plan
+  // an die tatsächlichen Daten an.
+  const syncRideFromStrava = async () => {
+    setLoadingRideSync(true);
+    setCyclingError(null);
+    try {
+      const rideRes = await fetch('/.netlify/functions/sync-ride');
+      const ride = await rideRes.json();
+      if (!rideRes.ok) throw new Error(ride.error || 'Strava-Sync fehlgeschlagen');
+      if (!ride.found) {
+        setCyclingError(ride.message || 'Keine Rad-Einheit gefunden.');
+        return;
+      }
+
+      // UI mit tatsächlichen Blöcken aktualisieren
+      if (Array.isArray(ride.blocks) && ride.blocks.length > 0) {
+        setCyclingBlocks(ride.blocks);
+      }
+      setSyncedRide(ride.activity);
+
+      // Recovery-Plan auf Basis der echten Daten berechnen
+      const latest   = bodyMeasurements[bodyMeasurements.length - 1];
+      const weightKg = cyclingWeight ? +cyclingWeight : (latest?.weight || 75);
+
+      setLoadingCycling(true);
+      setCyclingResult(null);
+      const res = await fetch('/.netlify/functions/cycling-nutrition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blocks:   ride.blocks,
+          weightKg,
+          ftpWatts: cyclingFtp ? +cyclingFtp : undefined,
+          actual: {
+            kcal:       ride.activity.calories,
+            avgHR:      ride.activity.avgHR,
+            maxHR:      ride.activity.maxHR,
+            avgWatts:   ride.activity.avgWatts,
+            distanceKm: ride.activity.distanceKm,
+            name:       ride.activity.name,
+            zoneSource: ride.zoneSource,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Fehler bei Ernährungsberechnung');
+      setCyclingResult(data);
+    } catch (err) {
+      setCyclingError(err.message);
+    } finally {
+      setLoadingRideSync(false);
+      setLoadingCycling(false);
+    }
+  };
+
   // ── Calculator ───────────────────────────────────────────────────────────────
   const calculateCalorieGoal = () => {
     const { gender, age, weight, height, activity, goal } = calculatorData;
@@ -509,6 +1190,7 @@ const KalorienTracker = () => {
     if (goal === 'lose') tdee -= 500;
     else if (goal === 'gain') tdee += 500;
     setCalculatedGoal(Math.round(tdee));
+    localStorage.setItem('calculator-data', JSON.stringify(calculatorData));
   };
 
   // ── Stats helpers ────────────────────────────────────────────────────────────
@@ -527,38 +1209,72 @@ const KalorienTracker = () => {
   };
 
   const calcStats = (days) => {
-    const tracked = days.filter(d => history[d]?.length > 0);
+    // Vergessene Tage (< 1500 kcal echte Einträge, außer heute) → Tagesziel als Wert.
+    // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
+    // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
+    const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
+    const vo2Base     = (kiResult?.kcalGoalVo2Day  > 0 ? kiResult.kcalGoalVo2Day  : null) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : restBase + 400);
+    const isRideAct   = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
+    const isVo2Act    = a => isRideAct(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
+    const getDayBase  = (training) => training?.activities?.some(isVo2Act) ? vo2Base : restBase;
+
+    const tracked = days;
     if (tracked.length === 0) return null;
 
-    const sums = tracked.reduce((acc, d) =>
-      (history[d] || []).reduce((a, m) => ({
-        kcal: a.kcal + (m.kcal || 0),
-        protein: a.protein + (m.protein || 0),
-        carbs: a.carbs + (m.carbs || 0),
-        fat: a.fat + (m.fat || 0),
-        fiber: a.fiber + (m.fiber || 0),
-      }), acc),
-      { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 }
-    );
+    const sums = tracked.reduce((acc, d) => {
+      const meals        = history[d] || [];
+      const hasCorrEntry = meals.some(m => m.isAutoCorrection);
+      const kcalLogged   = meals.reduce((s, m) => s + (m.kcal || 0), 0);
+      const realKcal     = hasCorrEntry ? meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0) : kcalLogged;
+      const isToday_     = d === todayKey;
+      const training     = trainingDays.find(t => t.date === d);
+      const dayBase      = getDayBase(training);
+      const dayGoal      = dayBase + tieredEatback(training);
+      // Fallback display-only (no backfill entry yet, day < 1500)
+      const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
+      const kcalEff      = useGoal ? dayGoal : kcalLogged;
+      if (useGoal) {
+        return { ...acc, kcal: acc.kcal + kcalEff };
+      }
+      // Correction entries contribute only kcal (macros = 0 for untracked days)
+      return meals.reduce((a, m) => ({
+        kcal:    a.kcal    + (m.kcal    || 0),
+        protein: a.protein + (!m.isAutoCorrection ? (m.protein || 0) : 0),
+        carbs:   a.carbs   + (!m.isAutoCorrection ? (m.carbs   || 0) : 0),
+        fat:     a.fat     + (!m.isAutoCorrection ? (m.fat     || 0) : 0),
+        fiber:   a.fiber   + (!m.isAutoCorrection ? (m.fiber   || 0) : 0),
+      }), acc);
+    }, { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
 
     const n = tracked.length;
     const waterDays = days.filter(d => (waterHistory[d] || 0) > 0);
     const waterSum = waterDays.reduce((acc, d) => acc + (waterHistory[d] || 0), 0);
 
     const dayData = days.map(d => {
-      const meals = history[d] || [];
+      const meals        = history[d] || [];
+      const training     = trainingDays.find(t => t.date === d);
+      const dayBase      = getDayBase(training);
+      const dayGoal      = dayBase + tieredEatback(training);
+      const kcalLogged   = Math.round(meals.reduce((a, m) => a + (m.kcal || 0), 0));
+      const isToday_     = d === todayKey;
+      const hasCorrEntry = meals.some(m => m.isAutoCorrection);
+      const realKcal     = hasCorrEntry ? Math.round(meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0)) : kcalLogged;
+      const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
       return {
-        date:    d,
-        kcal:    Math.round(meals.reduce((a, m) => a + (m.kcal    || 0), 0)),
-        protein: Math.round(meals.reduce((a, m) => a + (m.protein || 0), 0)),
-        carbs:   Math.round(meals.reduce((a, m) => a + (m.carbs   || 0), 0)),
-        fat:     Math.round(meals.reduce((a, m) => a + (m.fat     || 0), 0)),
-        fiber:   Math.round(meals.reduce((a, m) => a + (m.fiber   || 0), 0)),
+        date:        d,
+        kcal:        kcalLogged,
+        kcalDisplay: useGoal ? dayGoal : kcalLogged,
+        untracked:   hasCorrEntry || useGoal,
+        protein: Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.protein || 0), 0)),
+        carbs:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.carbs   || 0), 0)),
+        fat:     Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fat     || 0), 0)),
+        fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
         water:   waterHistory[d] || 0,
+        goal:    dayGoal,
       };
     });
 
-    const maxKcal = Math.max(...dayData.map(d => d.kcal), calorieGoal, 1);
+    const maxKcal = Math.max(...dayData.map(d => Math.max(d.kcalDisplay || d.kcal, d.goal)), 1);
 
     return {
       avg: {
@@ -681,6 +1397,7 @@ const KalorienTracker = () => {
             { key: 'week',  icon: <BarChart2  className="w-4 h-4" />, label: 'Woche' },
             { key: 'month', icon: <TrendingUp className="w-4 h-4" />, label: 'Monat' },
             { key: 'coach', icon: <Brain      className="w-4 h-4" />, label: 'Coach' },
+            { key: 'rad',   icon: <Bike       className="w-4 h-4" />, label: 'Rad'   },
           ].map(tab => (
             <button
               key={tab.key}
@@ -773,7 +1490,17 @@ const KalorienTracker = () => {
 
             {/* Summary card */}
             {(() => {
-              const effectiveGoal = (isToday && todayOptimized) ? todayOptimized.kcalGoal : calorieGoal;
+              // Formel: Basis + tatsächliche Strava-Kalorien des jeweiligen Tages
+              // An VO2max-Tagen: kein Defizit (volles TDEE als Basis)
+              const dayStrava = trainingDays.find(d => d.date === selectedDate);
+              const dayStravaKcal = dayStrava?.totalCalories || 0;
+              const _isRide = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
+              const _isVo2  = a => _isRide(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
+              const dayHasVo2 = dayStrava?.activities?.some(_isVo2) ?? false;
+              const restBase = dayHasVo2
+                ? ((kiResult?.kcalGoalVo2Day || 0) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : 0) || 2300)
+                : (kiResult?.kcalGoalRestDay || 1800);
+              const effectiveGoal = isToday ? effectiveTodayGoal : (restBase + tieredEatback(dayStrava));
               const isOver = totals.kcal > effectiveGoal;
               return (
             <div className="glass rounded-3xl p-6 mb-4 shadow-xl">
@@ -781,33 +1508,47 @@ const KalorienTracker = () => {
                 <div>
                   <h2 className="text-xl font-bold text-slate-800">Übersicht</h2>
                   {isToday && (
-                    <button
-                      onClick={() => { if (todayOptimized) { setTodayOptimized(null); } else { optimizeToday(); } }}
-                      disabled={!kiResult && trainingDays.length === 0}
-                      className={`mt-1 flex items-center gap-1 text-xs font-semibold transition-colors ${
-                        todayOptimized
-                          ? 'text-violet-600 hover:text-violet-800'
-                          : 'text-slate-400 hover:text-violet-600 disabled:opacity-30 disabled:cursor-not-allowed'
-                      }`}
-                    >
+                    <p className={`mt-1 flex items-center gap-1 text-xs font-semibold ${
+                      todayTrainingBonus > 0 ? 'text-emerald-600' : 'text-slate-400'
+                    }`}>
                       <Sparkles className="w-3 h-3" />
-                      {todayOptimized ? `Optimiert (${effectiveGoal} kcal) · zurücksetzen` : 'Heute optimieren'}
-                    </button>
+                      {todayTrainingBonus > 0
+                        ? `Trainingstag · +${todayTrainingBonus} kcal einberechnet`
+                        : (kiResult ? 'Ruhetag-Ziel aktiv' : 'Kalorienziel aus Einstellungen')}
+                    </p>
                   )}
                 </div>
-                <div className="text-right">
-                  <p className="text-5xl font-bold mono bg-gradient-to-r from-orange-500 to-rose-500 bg-clip-text text-transparent">
-                    {Math.round(totals.kcal)}
-                  </p>
-                  <p className="text-slate-500 text-xs font-semibold uppercase tracking-wide">Kalorien</p>
+                <div className="flex items-end gap-4">
+                  {/* Remaining – most important, largest */}
+                  <div className="text-right">
+                    <p className={`text-5xl font-bold mono ${isOver ? 'bg-gradient-to-r from-red-500 to-rose-600 bg-clip-text text-transparent' : 'bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent'}`}>
+                      {isOver ? `+${Math.round(totals.kcal - effectiveGoal)}` : Math.round(effectiveGoal - totals.kcal)}
+                    </p>
+                    <p className={`text-xs font-semibold uppercase tracking-wide ${isOver ? 'text-red-400' : 'text-emerald-500'}`}>
+                      {isOver ? 'über ziel' : 'verbleibend'}
+                    </p>
+                  </div>
+                  <div className="w-px h-14 bg-slate-200 self-center" />
+                  {/* Consumed + Goal stacked on right */}
+                  <div className="text-right">
+                    <p className="text-2xl font-bold mono bg-gradient-to-r from-orange-500 to-rose-500 bg-clip-text text-transparent">
+                      {Math.round(totals.kcal)}
+                    </p>
+                    <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide">verbraucht</p>
+                    <p className="text-slate-400 text-xs mt-2">Tagesziel <span className="font-bold text-slate-600">{effectiveGoal}</span> kcal</p>
+                  </div>
                 </div>
               </div>
 
-              {/* Today-optimized detail strip */}
-              {isToday && todayOptimized && (
-                <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-violet-50 border border-violet-200 rounded-xl text-xs text-violet-700">
-                  <Sparkles className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="leading-tight">{todayOptimized.reason}</span>
+              {/* Auto-adjustment info strip */}
+              {isToday && todayTrainingBonus > 0 && (
+                <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700">
+                  <Activity className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="leading-tight">
+                    Trainingstag erkannt · Ziel automatisch um +{todayTrainingBonus} kcal erhöht
+                    {trainingDays.find(d => d.date === todayKey)?.totalCalories > 0 &&
+                      ` (${trainingDays.find(d => d.date === todayKey).totalCalories} kcal verbrannt)`}
+                  </span>
                 </div>
               )}
 
@@ -829,12 +1570,30 @@ const KalorienTracker = () => {
                   </span>
                   <span className="text-xs text-slate-500">
                     Ziel: {effectiveGoal} kcal
-                    {isToday && todayOptimized?.bonus > 0 && (
-                      <span className="text-violet-500 ml-1">(+{todayOptimized.bonus} Training)</span>
+                    {isToday && todayTrainingBonus > 0 && (
+                      <span className="text-emerald-600 ml-1">(+{todayTrainingBonus} Training)</span>
                     )}
                   </span>
                 </div>
               </div>
+
+              {/* Meal suggestion button — only today, only when not over goal */}
+              {isToday && !isOver && (
+                <button
+                  onClick={() => {
+                    const remKcal    = Math.max(0, effectiveGoal - totals.kcal);
+                    const remProtein = Math.max(0, macroGoalGrams.protein - totals.protein);
+                    const remCarbs   = Math.max(0, macroGoalGrams.carbs   - totals.carbs);
+                    const remFat     = Math.max(0, macroGoalGrams.fat     - totals.fat);
+                    const remFiber   = Math.max(0, macroGoalGrams.fiber   - totals.fiber);
+                    suggestMeals(remKcal, { protein: remProtein, carbs: remCarbs, fat: remFat, fiber: remFiber });
+                  }}
+                  className="w-full mb-5 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-gradient-to-r from-violet-500 to-purple-600 text-white font-semibold text-sm shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] transition-all"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  Mahlzeit vorschlagen · noch {Math.round(Math.max(0, effectiveGoal - totals.kcal))} kcal verbleibend
+                </button>
+              )}
 
               {/* Macro cards with progress */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -871,6 +1630,84 @@ const KalorienTracker = () => {
             </div>
             );
             })()}
+
+            {/* ── Mikronährstoffe ── */}
+            <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+              <button
+                onClick={() => setShowMicronutrients(v => !v)}
+                className="w-full flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🔬</span>
+                  <h3 className="text-lg font-bold text-slate-800">Mikronährstoffe</h3>
+                  {hasMicroData && (
+                    <span className="text-xs bg-teal-100 text-teal-700 font-semibold px-2 py-0.5 rounded-full">
+                      {MICRO_TARGETS.filter(t => totals[t.key] >= t.goal).length}/{MICRO_TARGETS.length} erreicht
+                    </span>
+                  )}
+                  {!hasMicroData && currentMeals.length > 0 && (
+                    <span className="text-xs bg-slate-100 text-slate-500 font-medium px-2 py-0.5 rounded-full">
+                      Nur für neue Mahlzeiten
+                    </span>
+                  )}
+                </div>
+                <span className="text-slate-400 text-sm">{showMicronutrients ? '▲' : '▼'}</span>
+              </button>
+
+              {showMicronutrients && (
+                <div className="mt-4">
+                  {!hasMicroData && currentMeals.length > 0 && (
+                    <p className="text-sm text-slate-500 mb-4 text-center">
+                      Mikronährstoffe werden bei neu hinzugefügten Mahlzeiten automatisch erfasst.
+                    </p>
+                  )}
+                  {currentMeals.length === 0 && (
+                    <p className="text-sm text-slate-500 text-center">Noch keine Mahlzeiten heute.</p>
+                  )}
+                  <div className="grid grid-cols-1 gap-2">
+                    {MICRO_TARGETS.map(t => {
+                      const val  = totals[t.key] || 0;
+                      const pct  = Math.min((val / t.goal) * 100, 100);
+                      const done = val >= t.goal;
+                      const statusColor = done
+                        ? 'text-emerald-600' : pct >= 50
+                        ? 'text-amber-600'   : 'text-red-500';
+                      const barColor = done
+                        ? 'bg-emerald-500' : pct >= 50
+                        ? 'bg-amber-500'   : 'bg-red-400';
+                      const precision = t.unit === 'µg' ? 1 : (t.goal < 20 ? 1 : 0);
+                      return (
+                        <div key={t.key} className="flex items-center gap-3">
+                          <span className="text-base w-6 text-center flex-shrink-0">{t.emoji}</span>
+                          <div className="w-24 flex-shrink-0">
+                            <p className="text-xs font-semibold text-slate-700 truncate">{t.label}</p>
+                          </div>
+                          <div className="flex-1 relative">
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                          <div className="w-28 text-right flex-shrink-0">
+                            <span className={`text-xs font-bold mono ${statusColor}`}>
+                              {val.toFixed(precision)}{t.unit}
+                            </span>
+                            <span className="text-xs text-slate-400"> / {t.goal}{t.unit}</span>
+                          </div>
+                          {done && <span className="text-emerald-500 text-xs flex-shrink-0">✓</span>}
+                          {!done && <span className="text-xs text-slate-400 flex-shrink-0 w-4"></span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-400 mt-3 text-center">
+                    Referenzwerte: DGE (Deutsche Gesellschaft für Ernährung)
+                  </p>
+                </div>
+              )}
+            </div>
 
             {/* ── Water tracker ── */}
             <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
@@ -1024,6 +1861,27 @@ const KalorienTracker = () => {
               ) : (
                 <div className="space-y-3">
                   {currentMeals.map((meal, index) => {
+                    // ── Auto-correction entry (backfilled day goal) ──────────
+                    if (meal.isAutoCorrection) {
+                      return (
+                        <div key={meal.id} className="meal-card bg-slate-50 rounded-xl border border-dashed border-slate-300"
+                          style={{ animationDelay: `${index * 0.05}s` }}>
+                          <div className="p-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">📊</span>
+                              <div>
+                                <p className="text-sm font-medium text-slate-500">{meal.name}</p>
+                                <p className="text-xs text-slate-400">Automatisch · Tag nicht vollständig erfasst</p>
+                              </div>
+                            </div>
+                            <span className="px-3 py-1 rounded-full bg-slate-200 text-slate-600 text-sm font-semibold mono">
+                              {Math.round(meal.kcal)} kcal
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    // ── Regular meal card ────────────────────────────────────
                     const isExpanded = expandedMealId === meal.id;
                     const hc = healthColors(meal.healthScore);
                     return (
@@ -1176,7 +2034,16 @@ const KalorienTracker = () => {
 
           return (
             <>
-              <h2 className="text-2xl font-bold text-slate-800 mb-4 text-center">{title}</h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-2xl font-bold text-slate-800">{title}</h2>
+                <button
+                  onClick={exportPDF}
+                  className="flex items-center gap-2 px-3 py-2 bg-teal-500 hover:bg-teal-600 text-white text-xs font-semibold rounded-xl transition-colors shadow-sm"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  14-Tage PDF
+                </button>
+              </div>
 
               {!stats ? (
                 <div className="glass rounded-3xl p-12 shadow-xl text-center">
@@ -1255,9 +2122,10 @@ const KalorienTracker = () => {
 
                     <div className="flex items-end gap-1" style={{ height: '140px' }}>
                       {stats.dayData.map((day) => {
-                        const pct = day.kcal > 0 ? (day.kcal / stats.maxKcal) * 100 : 0;
-                        const goalPct = (calorieGoal / stats.maxKcal) * 100;
-                        const isOver = day.kcal > calorieGoal;
+                        const displayKcal = day.untracked ? (day.kcalDisplay || 0) : day.kcal;
+                        const pct = displayKcal > 0 ? (displayKcal / stats.maxKcal) * 100 : 0;
+                        const goalPct = (day.goal / stats.maxKcal) * 100;
+                        const isOver = displayKcal > day.goal;
                         const isSel = day.date === selectedDate;
 
                         return (
@@ -1273,15 +2141,17 @@ const KalorienTracker = () => {
                                 style={{ bottom: `${goalPct}%` }}
                               />
                               {/* Bar */}
-                              {day.kcal > 0 ? (
+                              {displayKcal > 0 ? (
                                 <div
                                   className={`w-full rounded-t-md transition-all group-hover:opacity-75 ${
-                                    isOver
-                                      ? 'bg-gradient-to-t from-red-500 to-rose-400'
-                                      : 'bg-gradient-to-t from-emerald-500 to-teal-400'
+                                    day.untracked
+                                      ? 'bg-slate-300 opacity-50 border border-dashed border-slate-400'
+                                      : isOver
+                                        ? 'bg-gradient-to-t from-red-500 to-rose-400'
+                                        : 'bg-gradient-to-t from-emerald-500 to-teal-400'
                                   } ${isSel ? 'ring-2 ring-offset-1 ring-slate-500' : ''}`}
                                   style={{ height: `${pct}%` }}
-                                  title={`${day.kcal} kcal`}
+                                  title={day.untracked ? `Nicht erfasst · geschätzt ${displayKcal} kcal (+10%)` : `${day.kcal} kcal (Ziel: ${day.goal} kcal)`}
                                 />
                               ) : (
                                 <div className="w-full h-1 bg-slate-200 rounded-full" />
@@ -1573,6 +2443,15 @@ const KalorienTracker = () => {
                   );
                 })()}
 
+                {/* Training sync error */}
+                {trainingSyncError && (
+                  <div className="flex items-start gap-2 mb-3 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+                    <span className="flex-shrink-0 mt-0.5">⚠</span>
+                    <span><span className="font-semibold">Training-Sync Fehler:</span> {trainingSyncError}</span>
+                    <button onClick={() => setTrainingSyncError(null)} className="ml-auto flex-shrink-0 text-rose-400 hover:text-rose-600">✕</button>
+                  </div>
+                )}
+
                 {/* No body data warning */}
                 {bodyMeasurements.length === 0 && (
                   <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 mb-2">
@@ -1588,6 +2467,21 @@ const KalorienTracker = () => {
                 {/* KI Result */}
                 {kiResult && !loadingKi && (
                   <div className="space-y-3">
+                    {/* RED-S Alert – prominent */}
+                    {kiResult.redSRisk && (
+                      <div className="bg-red-50 border-2 border-red-400 rounded-xl px-4 py-3 space-y-1.5">
+                        <p className="text-sm font-bold text-red-700">🚨 RED-S Risiko erkannt</p>
+                        <p className="text-xs text-red-600">Muskelabbau bei hoher Trainingsbelastung. Das Kaloriendefizit bleibt bei −300 kcal — Muskelschutz erfolgt über erhöhtes Protein.</p>
+                        {kiResult.proteinMinG && (
+                          <div className="flex items-center justify-between bg-red-100 rounded-lg px-3 py-2 mt-1">
+                            <span className="text-xs font-semibold text-red-700">Protein-Ziel (automatisch erhöht)</span>
+                            <span className="text-sm font-bold text-red-800">{kiResult.proteinMinG} g/Tag</span>
+                          </div>
+                        )}
+                        <p className="text-xs text-red-500">{kiResult.proteinPerKg} g/kg Körpergewicht · Makroziele wurden automatisch angepasst</p>
+                      </div>
+                    )}
+
                     {/* Warnings */}
                     {kiResult.warnings?.length > 0 && (
                       <div className="space-y-1">
@@ -1599,21 +2493,76 @@ const KalorienTracker = () => {
                       </div>
                     )}
 
-                    {/* New targets */}
-                    <div className="grid grid-cols-4 gap-2">
-                      {[
-                        { label: 'Kalorien', value: `${kiResult.kcalGoal}`, unit: 'kcal', color: 'bg-orange-50 border-orange-200 text-orange-700' },
-                        { label: 'Protein',  value: `${Math.round((kiResult.kcalGoal * (kiResult.macros?.proteinPct||30)/100)/4)}`, unit: 'g', color: 'bg-blue-50 border-blue-200 text-blue-700' },
-                        { label: 'Carbs',    value: `${Math.round((kiResult.kcalGoal * (kiResult.macros?.carbsPct||40)/100)/4)}`,   unit: 'g', color: 'bg-amber-50 border-amber-200 text-amber-700' },
-                        { label: 'Fett',     value: `${Math.round((kiResult.kcalGoal * (kiResult.macros?.fatPct||30)/100)/9)}`,    unit: 'g', color: 'bg-purple-50 border-purple-200 text-purple-700' },
-                      ].map(t => (
-                        <div key={t.label} className={`${t.color} border rounded-xl p-2.5 text-center`}>
-                          <p className="text-xs font-semibold opacity-70 mb-0.5">{t.label}</p>
-                          <p className="text-lg font-bold mono">{t.value}</p>
-                          <p className="text-xs opacity-60">{t.unit}</p>
+                    {/* Day-type calorie targets */}
+                    {kiResult.kcalGoalRestDay && (() => {
+                      const base = kiResult.kcalGoalRestDay;
+                      const todayT = trainingDays.find(d => d.date === todayKey);
+                      const todayBurn = todayT?.totalCalories || 0;
+                      const todayEatback = tieredEatback(todayT);
+                      const todayGoal = base + todayEatback;
+                      return (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
+                            <p className="text-xs text-slate-500 mb-1">🛋️ Ruhetag</p>
+                            <p className="text-xl font-bold text-slate-700">{base}</p>
+                            <p className="text-xs text-slate-400">kcal Basis</p>
+                          </div>
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
+                            <p className="text-xs text-emerald-600 mb-1">🏃 Heute</p>
+                            <p className="text-xl font-bold text-emerald-700">{todayGoal}</p>
+                            <p className="text-xs text-emerald-500">
+                              {todayBurn > 0 ? `${base} + ${todayEatback} (von ${todayBurn} Strava, ${Math.round(getEatbackFactor(todayT)*100)}%)` : `${base} kcal · kein Training`}
+                            </p>
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })()}
+
+                    {/* Macros – fixed gram targets, shown per day type */}
+                    {(kiResult.macroGoalsRestDay || kiResult.macroGoalsTrainDay) && (
+                      <div className="space-y-1.5">
+                        {[
+                          { label: '🛋️ Ruhetag',     src: kiResult.macroGoalsRestDay  },
+                          { label: '🏃 Trainingstag', src: kiResult.macroGoalsTrainDay },
+                        ].filter(r => r.src).map(row => (
+                          <div key={row.label} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+                            <p className="text-xs font-semibold text-slate-500 mb-1.5">{row.label}</p>
+                            <div className="grid grid-cols-4 gap-1.5">
+                              {[
+                                { label: 'Protein', value: row.src.proteinG, color: 'text-blue-700'   },
+                                { label: 'Carbs',   value: row.src.carbsG,   color: 'text-amber-700'  },
+                                { label: 'Fett',    value: row.src.fatG,     color: 'text-purple-700' },
+                                { label: 'Faser',   value: row.src.fiberG,   color: 'text-green-700'  },
+                              ].map(t => (
+                                <div key={t.label} className="text-center">
+                                  <p className={`text-sm font-bold ${t.color}`}>{t.value}g</p>
+                                  <p className="text-xs text-slate-400">{t.label}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* BMR + NEAT + TEF transparency */}
+                    {(kiResult.bmr || kiResult.tdeeRestDay) && (
+                      <div className="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2 space-y-1">
+                        <p className="font-semibold text-slate-500 mb-1">Berechnung Tagesziel</p>
+                        {kiResult.bmr   && <div className="flex justify-between"><span>Grundumsatz (BMR)</span><span className="font-medium text-slate-600">+{kiResult.bmr} kcal</span></div>}
+                        {kiResult.neat  && <div className="flex justify-between"><span>Alltagsbewegung (NEAT)</span><span className="font-medium text-slate-600">+{kiResult.neat} kcal</span></div>}
+                        {kiResult.tef   && <div className="flex justify-between"><span>Nahrungswärme (TEF)</span><span className="font-medium text-slate-600">+{kiResult.tef} kcal</span></div>}
+                        {kiResult.deficitApplied !== undefined && <div className="flex justify-between"><span>Defizit{kiResult.deficitApplied === 0 ? ' (RED-S: Erhaltung)' : ''}</span><span className="font-medium text-slate-600">−{kiResult.deficitApplied} kcal</span></div>}
+                        <div className="flex justify-between border-t border-slate-200 pt-1 mt-1">
+                          <span className="font-semibold text-slate-600">Basis Ruhetag</span>
+                          <span className="font-bold text-slate-700">{kiResult.kcalGoalRestDay} kcal</span>
+                        </div>
+                        <div className="flex justify-between text-emerald-600">
+                          <span>+ Strava-Kalorien (live)</span>
+                          <span className="font-medium">= {effectiveTodayGoal} kcal heute</span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Stats row */}
                     <div className="flex gap-2 text-xs text-slate-500">
@@ -1627,7 +2576,7 @@ const KalorienTracker = () => {
                           ~<span className="font-semibold text-slate-700">{kiResult.estimatedWeeksToGoal} Wochen</span> bis Ziel
                         </span>
                       )}
-                      {kiResult.trainDayBonus > 0 && (
+                      {false && kiResult.trainDayBonus > 0 && (
                         <span className="flex-1 text-center bg-emerald-50 rounded-lg py-1.5 px-2 text-emerald-700">
                           +<span className="font-semibold">{kiResult.trainDayBonus}</span> kcal Trainingstag
                         </span>
@@ -1734,10 +2683,517 @@ const KalorienTracker = () => {
                   </div>
                 )}
               </div>
+
+              {/* ── Coach Chat ── */}
+              <div className="glass rounded-3xl shadow-xl overflow-hidden">
+                {/* Header */}
+                <div className="bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-4 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Brain className="w-5 h-5 text-white" />
+                    <h3 className="text-white font-bold text-base">Coach Chat</h3>
+                    <span className="text-xs bg-white/20 text-white px-2 py-0.5 rounded-full">Zugriff auf alle Daten</span>
+                  </div>
+                  {chatMessages.length > 0 && (
+                    <button
+                      onClick={() => setChatMessages([])}
+                      className="text-white/60 hover:text-white text-xs transition-colors"
+                    >
+                      Leeren
+                    </button>
+                  )}
+                </div>
+
+                {/* Messages */}
+                <div className="px-4 py-3 max-h-[420px] overflow-y-auto space-y-3 bg-slate-50/50">
+                  {chatMessages.length === 0 && (
+                    <div className="py-6 text-center">
+                      <p className="text-slate-500 text-sm mb-4">Frag deinen Coach – er kennt alle deine Daten.</p>
+                      <div className="flex flex-wrap gap-2 justify-center">
+                        {[
+                          'Wie läuft mein Fortschritt?',
+                          'Was sollte ich heute essen?',
+                          'Analysiere meine letzte Woche',
+                          'Bin ich im Kaloriendefizit?',
+                        ].map(q => (
+                          <button
+                            key={q}
+                            onClick={() => sendChatMessage(q)}
+                            className="text-xs bg-white border border-violet-200 text-violet-700 hover:bg-violet-50 rounded-full px-3 py-1.5 transition-colors shadow-sm"
+                          >
+                            {q}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {chatMessages.map((msg, i) => (
+                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
+                        msg.role === 'user'
+                          ? 'bg-gradient-to-br from-violet-500 to-indigo-500 text-white rounded-br-sm'
+                          : 'bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
+                      }`}>
+                        {msg.role === 'assistant' && (
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <Brain className="w-3 h-3 text-violet-500" />
+                            <span className="text-xs font-semibold text-violet-600">Coach</span>
+                          </div>
+                        )}
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                      </div>
+                    </div>
+                  ))}
+
+                  {loadingChat && (
+                    <div className="flex justify-start">
+                      <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <Brain className="w-3 h-3 text-violet-500" />
+                          <span className="text-xs text-slate-400">Coach tippt</span>
+                          <div className="flex gap-0.5">
+                            {[0,1,2].map(d => (
+                              <div key={d} className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: `${d*150}ms` }} />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Input */}
+                <div className="px-4 py-3 border-t border-slate-200 bg-white">
+                  <div className="flex gap-2 items-end">
+                    <textarea
+                      value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
+                      placeholder="Stell deinem Coach eine Frage..."
+                      rows={1}
+                      className="flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent max-h-28 overflow-auto"
+                      style={{ lineHeight: '1.4' }}
+                    />
+                    <button
+                      onClick={() => sendChatMessage()}
+                      disabled={!chatInput.trim() || loadingChat}
+                      className="flex-shrink-0 w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-500 hover:from-violet-600 hover:to-indigo-600 text-white flex items-center justify-center shadow-md transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {loadingChat ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1.5 text-center">Enter zum Senden · Shift+Enter für neue Zeile</p>
+                </div>
+              </div>
             </>
           );
         })()}
       </div>
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* RAD NUTRITION TAB                                                          */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'rad' && (() => {
+        const zones = [
+          { key: 'Z1', label: 'Zone 1', sub: 'Regeneration' },
+          { key: 'Z2', label: 'Zone 2', sub: 'Grundlage' },
+          { key: 'Z3', label: 'Zone 3', sub: 'Tempo' },
+          { key: 'Z4', label: 'Zone 4', sub: 'Schwelle' },
+          { key: 'Z5', label: 'Zone 5', sub: 'VO₂max' },
+          { key: 'Z6', label: 'Zone 6', sub: 'Sprint' },
+        ];
+        const totalMin = cyclingBlocks.reduce((s, b) => s + (Number(b.minutes) || 0), 0);
+        const MacroChip = ({ label, value, unit = 'g', color }) => (
+          <div className={`flex flex-col items-center px-3 py-2 rounded-xl ${color}`}>
+            <span className="text-lg font-bold">{value}{unit}</span>
+            <span className="text-xs opacity-70">{label}</span>
+          </div>
+        );
+        const NutritionCard = ({ title, icon, timing, carbsG, proteinG, fatG, examples, accent }) => (
+          <div className={`glass rounded-2xl p-4 mb-3 border-l-4 ${accent}`}>
+            <div className="flex items-center gap-2 mb-1">
+              {icon}
+              <span className="font-bold text-slate-800">{title}</span>
+              {timing && <span className="ml-auto text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{timing}</span>}
+            </div>
+            <div className="flex gap-2 mt-2 mb-2">
+              <MacroChip label="Carbs"   value={carbsG}   color="bg-amber-50 text-amber-700" />
+              <MacroChip label="Protein" value={proteinG} color="bg-blue-50 text-blue-700" />
+              <MacroChip label="Fett"    value={fatG}     color="bg-rose-50 text-rose-700" />
+            </div>
+            {examples && <p className="text-xs text-slate-500 mt-1 leading-relaxed">💡 {examples}</p>}
+          </div>
+        );
+        return (
+          <div className="px-1">
+            <h2 className="text-2xl font-bold text-slate-800 mb-1 text-center flex items-center justify-center gap-2">
+              <Bike className="w-6 h-6 text-emerald-600" /> Rad-Ernährung
+            </h2>
+            <p className="text-center text-sm text-slate-400 mb-5">Optimale Nutrition vor · während · nach der Einheit</p>
+
+            {/* Block Builder */}
+            <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+              <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
+                <Zap className="w-4 h-4 text-amber-500" /> Trainingsblöcke
+              </h3>
+              <div className="space-y-2 mb-3">
+                {cyclingBlocks.map((block, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <select
+                      value={block.zone}
+                      onChange={e => setCyclingBlocks(prev => prev.map((b, j) => j === i ? { ...b, zone: e.target.value } : b))}
+                      className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                    >
+                      {zones.map(z => (
+                        <option key={z.key} value={z.key}>{z.label} – {z.sub}</option>
+                      ))}
+                    </select>
+                    <div className="flex items-center gap-1 bg-slate-100 rounded-xl px-3 py-2">
+                      <input
+                        type="number"
+                        min="1"
+                        max="600"
+                        value={block.minutes}
+                        onChange={e => setCyclingBlocks(prev => prev.map((b, j) => j === i ? { ...b, minutes: +e.target.value } : b))}
+                        className="w-14 bg-transparent text-sm font-semibold text-center focus:outline-none"
+                      />
+                      <span className="text-xs text-slate-500">min</span>
+                    </div>
+                    {cyclingBlocks.length > 1 && (
+                      <button onClick={() => setCyclingBlocks(prev => prev.filter((_, j) => j !== i))}
+                        className="p-2 text-slate-400 hover:text-rose-500 transition-colors">
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setCyclingBlocks(prev => [...prev, { zone: 'Z2', minutes: 30 }])}
+                className="w-full py-2 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 text-sm hover:border-emerald-400 hover:text-emerald-500 transition-all flex items-center justify-center gap-1"
+              >
+                <Plus className="w-4 h-4" /> Block hinzufügen
+              </button>
+
+              {/* Summary + Gewicht + FTP */}
+              <div className="flex items-center gap-3 mt-4 pt-4 border-t border-slate-100">
+                <div className="flex-1 text-center">
+                  <p className="text-2xl font-bold text-emerald-600">{totalMin}</p>
+                  <p className="text-xs text-slate-400">Minuten gesamt</p>
+                </div>
+                <div className="w-px h-10 bg-slate-200" />
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500 block mb-1">
+                    Gewicht
+                    {!cyclingWeight && bodyMeasurements.length > 0 && (
+                      <span className="ml-1 text-emerald-500">(aus Körperdaten: {bodyMeasurements[bodyMeasurements.length-1]?.weight} kg)</span>
+                    )}
+                  </label>
+                  <div className="flex items-center gap-1 bg-slate-100 rounded-xl px-3 py-2">
+                    <input
+                      type="number"
+                      placeholder={bodyMeasurements[bodyMeasurements.length-1]?.weight?.toString() || '75'}
+                      value={cyclingWeight}
+                      onChange={e => setCyclingWeight(e.target.value)}
+                      className="w-full bg-transparent text-sm font-semibold focus:outline-none"
+                    />
+                    <span className="text-xs text-slate-500">kg</span>
+                  </div>
+                </div>
+                <div className="w-px h-10 bg-slate-200" />
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500 block mb-1">FTP (optional)</label>
+                  <div className="flex items-center gap-1 bg-slate-100 rounded-xl px-3 py-2">
+                    <input
+                      type="number"
+                      placeholder="z.B. 240"
+                      value={cyclingFtp}
+                      onChange={e => setCyclingFtp(e.target.value)}
+                      className="w-full bg-transparent text-sm font-semibold focus:outline-none"
+                    />
+                    <span className="text-xs text-slate-500">W</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Calculate Button */}
+            <button
+              onClick={calcCyclingNutrition}
+              disabled={loadingCycling || totalMin === 0}
+              className="w-full py-4 rounded-2xl font-bold text-white text-base shadow-lg transition-all mb-5 flex items-center justify-center gap-2 disabled:opacity-50"
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}
+            >
+              {loadingCycling && !loadingRideSync
+                ? <><Loader2 className="w-5 h-5 animate-spin" /> Berechne Ernährungsplan…</>
+                : <><Bike className="w-5 h-5" /> Ernährungsplan berechnen</>}
+            </button>
+
+            {/* Sync nach der Einheit */}
+            <button
+              onClick={syncRideFromStrava}
+              disabled={loadingRideSync || loadingCycling}
+              className="w-full py-3 rounded-2xl font-semibold text-violet-700 text-sm border-2 border-violet-200 bg-violet-50 hover:bg-violet-100 transition-all mb-5 flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {loadingRideSync
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Hole Strava-Daten…</>
+                : <><RefreshCw className="w-4 h-4" /> Nach Einheit synchronisieren (Strava)</>}
+            </button>
+
+            {cyclingError && (
+              <div className="glass rounded-2xl p-4 mb-4 border border-rose-200 bg-rose-50">
+                <p className="text-rose-600 text-sm">⚠️ {cyclingError}</p>
+              </div>
+            )}
+
+            {/* Synchronisierte Einheit – Banner */}
+            {syncedRide && cyclingResult?.isActual && (
+              <div className="glass rounded-2xl p-4 mb-4 border-l-4 border-violet-400">
+                <div className="flex items-center gap-2 mb-2">
+                  <RefreshCw className="w-4 h-4 text-violet-500" />
+                  <span className="font-bold text-slate-800 text-sm">{syncedRide.name || 'Radeinheit'}</span>
+                  <span className="ml-auto text-xs text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full">
+                    {syncedRide.date ? new Date(syncedRide.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short' }) : 'synchronisiert'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {syncedRide.movingMinutes != null && <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded-full">⏱ {syncedRide.movingMinutes} min</span>}
+                  {syncedRide.calories      != null && <span className="bg-orange-50 text-orange-700 px-2 py-1 rounded-full">🔥 {syncedRide.calories} kcal</span>}
+                  {syncedRide.distanceKm    != null && <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded-full">📍 {syncedRide.distanceKm} km</span>}
+                  {syncedRide.avgHR         != null && <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded-full">❤️ {Math.round(syncedRide.avgHR)} bpm</span>}
+                  {syncedRide.avgWatts      != null && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded-full">⚡ {Math.round(syncedRide.avgWatts)} W</span>}
+                </div>
+                <p className="text-xs text-violet-500 mt-2">Recovery-Plan an die tatsächlichen Werte angepasst.</p>
+              </div>
+            )}
+
+            {/* Results */}
+            {cyclingResult && (() => {
+              const r = cyclingResult;
+              return (
+                <>
+                  {/* Summary bar */}
+                  <div className="glass rounded-2xl p-4 mb-4 flex items-center justify-around text-center shadow-md">
+                    <div>
+                      <p className="text-xl font-bold text-slate-800">{r.totalEnergyKcal}</p>
+                      <p className="text-xs text-slate-400">kcal Verbrauch</p>
+                    </div>
+                    <div className="w-px h-10 bg-slate-200" />
+                    <div>
+                      <p className="text-xl font-bold text-emerald-600">{r.totalMinutes}</p>
+                      <p className="text-xs text-slate-400">Minuten</p>
+                    </div>
+                    <div className="w-px h-10 bg-slate-200" />
+                    <div>
+                      <p className="text-xl font-bold text-slate-700">{r.weightKg}</p>
+                      <p className="text-xs text-slate-400">kg Gewicht</p>
+                    </div>
+                    <div className="w-px h-10 bg-slate-200" />
+                    <div>
+                      <p className="text-xl font-bold text-blue-600">{r.during?.fluidMlTotal || 0}</p>
+                      <p className="text-xs text-slate-400">ml Flüssigkeit</p>
+                    </div>
+                  </div>
+
+                  {/* PRE */}
+                  <h3 className="font-bold text-slate-600 text-xs uppercase tracking-widest mb-2 flex items-center gap-1">
+                    <Utensils className="w-3.5 h-3.5" /> Vorher
+                  </h3>
+                  <NutritionCard
+                    title="Hauptmahlzeit"
+                    icon={<Utensils className="w-4 h-4 text-amber-500" />}
+                    timing={r.pre?.meal?.timing}
+                    carbsG={r.pre?.meal?.carbsG} proteinG={r.pre?.meal?.proteinG} fatG={r.pre?.meal?.fatG}
+                    examples={r.pre?.meal?.examples}
+                    accent="border-amber-400"
+                  />
+                  <NutritionCard
+                    title="Snack"
+                    icon={<Zap className="w-4 h-4 text-yellow-500" />}
+                    timing={r.pre?.snack?.timing}
+                    carbsG={r.pre?.snack?.carbsG} proteinG={r.pre?.snack?.proteinG} fatG={r.pre?.snack?.fatG}
+                    examples={r.pre?.snack?.examples}
+                    accent="border-yellow-400"
+                  />
+
+                  {/* DURING */}
+                  <h3 className="font-bold text-slate-600 text-xs uppercase tracking-widest mb-2 mt-4 flex items-center gap-1">
+                    <Activity className="w-3.5 h-3.5" /> Während der Fahrt
+                  </h3>
+                  {r.during?.needed === false ? (
+                    <div className="glass rounded-2xl p-4 mb-3 border-l-4 border-emerald-300 text-sm text-slate-600">
+                      ✅ Bei dieser kurzen/leichten Einheit ist keine Ernährung während der Fahrt nötig.
+                      <br />
+                      <span className="text-blue-600 font-semibold">💧 Flüssigkeit: {r.during?.fluidMlTotal || 0} ml ({r.during?.fluidMlPerHour || 0} ml/h)</span>
+                    </div>
+                  ) : (
+                    <div className="glass rounded-2xl p-4 mb-3 border-l-4 border-emerald-400">
+                      {/* Carb schedule per hour */}
+                      {r.during?.carbSchedule?.length > 0 ? (
+                        <div className="mb-3">
+                          <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1">
+                            {r.isVeryIntense
+                              ? <span className="text-red-500 font-bold">⚡ Hohe Intensität – 80g/h von Beginn an</span>
+                              : <span>📈 Carbs-Stufenplan</span>}
+                          </p>
+                          <div className="flex gap-2 flex-wrap mb-2">
+                            {r.during.carbSchedule.map(s => (
+                              <div key={s.hour} className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-center min-w-[60px]">
+                                <p className="text-xs text-amber-500">Std. {s.hour}</p>
+                                <p className="text-sm font-bold text-amber-700">{s.carbsG}g</p>
+                                <p className="text-xs text-amber-400">{s.ratePerHour}g/h</p>
+                              </div>
+                            ))}
+                            <div className="bg-orange-50 border border-orange-200 rounded-lg px-3 py-1.5 text-center min-w-[60px]">
+                              <p className="text-xs text-orange-500">Gesamt</p>
+                              <p className="text-sm font-bold text-orange-700">{r.during.totalCarbsG}g</p>
+                              <p className="text-xs text-orange-400">Carbs</p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2 mb-3">
+                          <MacroChip label="Carbs/h"    value={r.during?.perHourCarbsG}  color="bg-amber-50 text-amber-700" />
+                          <MacroChip label="Carbs ges." value={r.during?.totalCarbsG}    color="bg-orange-50 text-orange-700" />
+                        </div>
+                      )}
+                      {/* Fluid */}
+                      <div className="flex gap-2 mb-2">
+                        <MacroChip label="Fluid/h"    value={r.during?.fluidMlPerHour} unit="ml" color="bg-blue-50 text-blue-700" />
+                        <MacroChip label="Fluid ges." value={r.during?.fluidMlTotal}   unit="ml" color="bg-cyan-50 text-cyan-700" />
+                      </div>
+                      {r.during?.electrolytes && (
+                        <p className="text-xs text-violet-600 font-semibold mb-1">⚡ Elektrolyte empfohlen</p>
+                      )}
+                      {r.during?.examples && <p className="text-xs text-slate-500 leading-relaxed">💡 {r.during.examples}</p>}
+                    </div>
+                  )}
+
+                  {/* POST */}
+                  <h3 className="font-bold text-slate-600 text-xs uppercase tracking-widest mb-2 mt-4 flex items-center gap-1">
+                    <Wind className="w-3.5 h-3.5" /> Recovery – Nachher
+                  </h3>
+                  <NutritionCard
+                    title="Sofort-Recovery"
+                    icon={<Zap className="w-4 h-4 text-emerald-500" />}
+                    timing={r.post?.immediate?.timing}
+                    carbsG={r.post?.immediate?.carbsG} proteinG={r.post?.immediate?.proteinG} fatG={r.post?.immediate?.fatG}
+                    examples={r.post?.immediate?.examples}
+                    accent="border-emerald-400"
+                  />
+                  <NutritionCard
+                    title="Mahlzeit"
+                    icon={<Utensils className="w-4 h-4 text-teal-500" />}
+                    timing={r.post?.meal?.timing}
+                    carbsG={r.post?.meal?.carbsG} proteinG={r.post?.meal?.proteinG} fatG={r.post?.meal?.fatG}
+                    examples={r.post?.meal?.examples}
+                    accent="border-teal-400"
+                  />
+
+                  {/* Tips */}
+                  {r.tips?.length > 0 && (
+                    <div className="glass rounded-2xl p-4 mt-2 mb-4">
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Hinweise</p>
+                      <ul className="space-y-1">
+                        {r.tips.map((tip, i) => (
+                          <li key={i} className="text-sm text-slate-600 flex items-start gap-2">
+                            <span className="text-emerald-500 mt-0.5">•</span>{tip}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        );
+      })()}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* MEAL SUGGESTIONS MODAL                                                    */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {showMealsModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-lg max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-violet-500 to-purple-600 text-white p-5 rounded-t-3xl flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2"><Sparkles className="w-5 h-5" /> Mahlzeit-Vorschläge</h2>
+                <p className="text-xs text-white/70 mt-0.5">5 Gerichte für deine verbleibenden Makros</p>
+              </div>
+              <button onClick={() => setShowMealsModal(false)} className="p-2 hover:bg-white/20 rounded-full transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              {/* Loading */}
+              {loadingMeals && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-slate-400">
+                  <Loader2 className="w-8 h-8 animate-spin text-violet-500" />
+                  <p className="text-sm">KI erstellt Vorschläge…</p>
+                </div>
+              )}
+
+              {/* Error */}
+              {mealsError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                  ⚠ {mealsError}
+                </div>
+              )}
+
+              {/* Suggestions */}
+              {mealSuggestions && mealSuggestions.map((meal, i) => (
+                <div key={i} className="border border-slate-200 rounded-2xl p-4 hover:border-violet-300 hover:bg-violet-50/30 transition-all">
+                  <div className="flex items-start gap-3">
+                    <span className="text-2xl flex-shrink-0 mt-0.5">{meal.emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-slate-800 text-sm leading-tight">{meal.name}</p>
+                      <p className="text-xs text-slate-500 mt-0.5 leading-snug">{meal.description}</p>
+                      {/* Ingredients with quantities */}
+                      {meal.ingredients && (
+                        <p className="text-xs text-slate-400 mt-1.5 leading-snug">
+                          📦 {meal.ingredients}
+                        </p>
+                      )}
+                      {/* Macro chips */}
+                      <div className="flex flex-wrap gap-1.5 mt-2.5">
+                        <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">{Math.round(meal.kcal)} kcal</span>
+                        <span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded-full">P {Math.round(meal.protein)}g</span>
+                        <span className="bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">K {Math.round(meal.carbs)}g</span>
+                        <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded-full">F {Math.round(meal.fat)}g</span>
+                        {meal.fiber > 0 && <span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">B {Math.round(meal.fiber)}g</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* Refresh button */}
+              {mealSuggestions && !loadingMeals && (
+                <button
+                  onClick={() => {
+                    const todayMeals = history[todayKey] || [];
+                    const eaten = todayMeals.reduce((s, m) => ({
+                      kcal: s.kcal + (m.kcal || 0), protein: s.protein + (m.protein || 0),
+                      carbs: s.carbs + (m.carbs || 0), fat: s.fat + (m.fat || 0), fiber: s.fiber + (m.fiber || 0),
+                    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+                    suggestMeals(
+                      Math.max(0, effectiveTodayGoal - eaten.kcal),
+                      { protein: Math.max(0, macroGoalGrams.protein - eaten.protein), carbs: Math.max(0, macroGoalGrams.carbs - eaten.carbs), fat: Math.max(0, macroGoalGrams.fat - eaten.fat), fiber: Math.max(0, macroGoalGrams.fiber - eaten.fiber) }
+                    );
+                  }}
+                  className="w-full py-3 rounded-xl border-2 border-violet-200 text-violet-600 font-semibold text-sm hover:bg-violet-50 transition-colors flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" /> Neue Vorschläge
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {/* BODY MEASUREMENT MODAL                                                   */}
