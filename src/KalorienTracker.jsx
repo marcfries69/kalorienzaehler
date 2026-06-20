@@ -113,6 +113,7 @@ const KalorienTracker = () => {
   const [cyclingError, setCyclingError] = useState(null);
   const [loadingRideSync, setLoadingRideSync] = useState(false);
   const [syncedRide, setSyncedRide] = useState(null); // zuletzt synchronisierte Strava-Einheit
+  const [claudeCopied, setClaudeCopied] = useState(null); // 'training' | 'data' | null
   const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [syncError, setSyncError] = useState(null);
   const [trainingSyncError, setTrainingSyncError] = useState(null);
@@ -1333,6 +1334,102 @@ const KalorienTracker = () => {
       ? { bg: 'bg-yellow-50 border-yellow-200', circle: 'bg-gradient-to-br from-yellow-500 to-amber-500', title: 'text-yellow-800', text: 'text-yellow-700', badge: 'bg-gradient-to-r from-yellow-500 to-amber-500' }
       : { bg: 'bg-red-50 border-red-200', circle: 'bg-gradient-to-br from-red-500 to-rose-500', title: 'text-red-800', text: 'text-red-700', badge: 'bg-gradient-to-r from-red-500 to-rose-500' };
 
+  // ── Claude Export ────────────────────────────────────────────────────────────
+  const buildClaudeExport = (mode = 'data') => {
+    const now = new Date();
+    const days14 = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 13 + i);
+      return toDateKey(d);
+    });
+
+    // Ernährung letzte 14 Tage
+    const nutritionLines = days14.map(dateKey => {
+      const meals   = (history[dateKey] || []).filter(m => !m.isAutoCorrection);
+      const strava  = trainingDays.find(t => t.date === dateKey);
+      const kcal    = Math.round(meals.reduce((s, m) => s + (m.kcal    || 0), 0));
+      const prot    = Math.round(meals.reduce((s, m) => s + (m.protein || 0), 0));
+      const carbs   = Math.round(meals.reduce((s, m) => s + (m.carbs   || 0), 0));
+      const fat     = Math.round(meals.reduce((s, m) => s + (m.fat     || 0), 0));
+      const label   = new Date(dateKey + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+      const trainStr = strava ? ` | Training: ${strava.totalCalories} kcal, ${strava.totalMinutes} min (${(strava.types||[]).join('+')})` : '';
+      return kcal > 0
+        ? `${label}: ${kcal} kcal | P ${prot}g | C ${carbs}g | F ${fat}g${trainStr}`
+        : `${label}: nicht erfasst${trainStr}`;
+    }).join('\n');
+
+    // Körperdaten (letzte 8 Messungen)
+    const bodyLines = [...bodyMeasurements].slice(-8).map(m =>
+      `${m.date}: ${m.weight ?? '-'} kg | KFA ${m.fatPct ?? '-'}% | Muskeln ${m.musclePct ?? '-'}% | Viszeral ${m.visceralFat ?? '-'}`
+    ).join('\n') || 'Keine Körperdaten vorhanden';
+
+    // Ziele
+    const goalLine = bodyGoals.weight
+      ? `Ziel: ${bodyGoals.weight} kg | KFA ${bodyGoals.fatPct ?? '-'}% | Muskeln ${bodyGoals.musclePct ?? '-'}%`
+      : 'Keine Körperziele definiert';
+
+    // Makroziele
+    const macroLine = kiResult?.macroGoalsRestDay
+      ? `Ruhetag: ${kiResult.kcalGoalRestDay} kcal | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
+Trainingstag: ${kiResult.kcalGoalRestDay} + tiered Sportkalorien | P 170g | C 200g | F 85g
+Zone2/VO2max-Rad: | C 300g | F 85g`
+      : `Kalorienziel: ${calorieGoal} kcal`;
+
+    const header = mode === 'training'
+      ? `Du bist mein persönlicher Fitness- und Ernährungscoach. Analysiere meine Daten der letzten 2 Wochen und optimiere meinen Trainings- und Ernährungsplan für die nächsten 4 Wochen.
+
+Berücksichtige dabei:
+- Mein primäres Ziel ist Fettreduktion bei Erhalt der Muskelmasse und Regenerationsfähigkeit
+- Ich fahre hauptsächlich Radsport (Strava) mit gelegentlichem Kraft- und Lauftraining
+- Kalorienziel Ruhetag: 1800 kcal | Sporttage: tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
+- Tägliches Defizit soll 200–500 kcal bleiben (nie über 500!)
+- RED-S-Risiko vermeiden: kein extremes Defizit an Intensivtagen
+
+Erstelle einen konkreten Wochenplan mit:
+1. Trainingsstruktur (Intensität, Dauer, Erholung)
+2. Ernährungsstrategie pro Trainingstyp
+3. Konkrete Mahlzeitenbeispiele
+4. Anpassungen basierend auf den Trends in meinen Daten
+
+`
+      : `Hier sind meine aktuellen Fitness- und Ernährungsdaten der letzten 2 Wochen:\n\n`;
+
+    return `${header}═══ KÖRPERDATEN ═══
+${bodyLines}
+
+${goalLine}
+
+═══ KALORIE- & MAKROZIELE ═══
+${macroLine}
+
+═══ ERNÄHRUNG & TRAINING – LETZTE 14 TAGE ═══
+${nutritionLines}
+
+═══ STRAVA-TRAINING (letzte 14 Tage) ═══
+${trainingDays.filter(d => {
+  const diff = (now - new Date(d.date + 'T12:00:00')) / 86400000;
+  return diff >= 0 && diff <= 14;
+}).map(d => `${d.date}: ${d.totalCalories} kcal, ${d.totalMinutes} min, ${(d.types||[]).join('+')}`).join('\n') || 'Keine Strava-Daten'}`;
+  };
+
+  const shareWithClaude = async (mode = 'data') => {
+    const text = buildClaudeExport(mode);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback: textarea-Trick
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setClaudeCopied(mode);
+    setTimeout(() => setClaudeCopied(null), 3000);
+    window.open('https://claude.ai/new', '_blank');
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 p-4 md:p-8 font-sans">
@@ -2294,6 +2391,46 @@ const KalorienTracker = () => {
               <h2 className="text-2xl font-bold text-slate-800 mb-4 text-center flex items-center justify-center gap-2">
                 <Brain className="w-6 h-6 text-violet-600" /> KI Coach
               </h2>
+
+              {/* ── Mit Claude teilen ── */}
+              <div className="glass rounded-3xl p-4 mb-4 shadow-xl border border-amber-100">
+                <p className="text-xs text-slate-500 mb-3 flex items-center gap-1.5">
+                  <span className="text-amber-500">✦</span>
+                  <span>Daten der letzten 14 Tage in Zwischenablage kopieren und Claude öffnen</span>
+                </p>
+                <div className="flex gap-2">
+                  {/* Trainingsplan-Button (primär) */}
+                  <button
+                    onClick={() => shareWithClaude('training')}
+                    className="flex-1 py-3 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-md
+                      bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white"
+                  >
+                    {claudeCopied === 'training' ? (
+                      <><Check className="w-4 h-4" /> Kopiert! Claude öffnet sich…</>
+                    ) : (
+                      <><Zap className="w-4 h-4" /> Trainingsplan optimieren</>
+                    )}
+                  </button>
+                  {/* Rohdaten-Button (sekundär) */}
+                  <button
+                    onClick={() => shareWithClaude('data')}
+                    title="Alle Daten kopieren (ohne Prompt)"
+                    className="px-4 py-3 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5 transition-all
+                      bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+                  >
+                    {claudeCopied === 'data' ? (
+                      <><Check className="w-3.5 h-3.5" /> Kopiert!</>
+                    ) : (
+                      <><Upload className="w-3.5 h-3.5" /> Daten</>
+                    )}
+                  </button>
+                </div>
+                {(claudeCopied === 'training' || claudeCopied === 'data') && (
+                  <p className="text-xs text-emerald-600 mt-2 text-center font-medium">
+                    ✓ In Zwischenablage · Claude öffnet sich · einfach einfügen (⌘V)
+                  </p>
+                )}
+              </div>
 
               {/* Body Dashboard */}
               <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
