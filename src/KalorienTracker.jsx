@@ -127,8 +127,8 @@ const KalorienTracker = () => {
       // Discard stale results where calories were null (old bug)
       if (r && !r.kcalGoalRestDay && !r.kcalGoal) return null;
       // Invalidate cache if base calorie target changed (now 1800), VO2max field missing,
-      // or rest-day macros are stale (now Carbs 120g / Fett 71g)
-      const staleRestMacros = r?.macroGoalsRestDay && r.macroGoalsRestDay.carbsG !== 120;
+      // or rest-day macros are stale (now Carbs 150g / Fett 62g)
+      const staleRestMacros = r?.macroGoalsRestDay && r.macroGoalsRestDay.carbsG !== 150;
       if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 1800 || !('kcalGoalVo2Day' in r) || staleRestMacros)) {
         localStorage.removeItem('ki-result');
         return null;
@@ -768,11 +768,11 @@ const KalorienTracker = () => {
   const todayIsTrainingDay = todayHasStrength || todayHasRun || todayLongRide || todayVo2maxRide;
 
   const macroGoalGrams = (() => {
-    let carbs, fat;
+    let protein = 170, carbs, fat;
     if (todayLongRide || todayVo2maxRide)     { carbs = 300; fat = 85; } // Zone 2 ≥90 min oder VO2max
     else if (todayHasRun || todayHasStrength) { carbs = 200; fat = 85; }
-    else                                      { carbs = 120; fat = 71; } // Ruhetag/Gehen → passt auf 1800 kcal
-    return { protein: 170, carbs, fat, fiber: 35 };
+    else                                       { protein = 160; carbs = 150; fat = 62; } // Ruhetag/Gehen → passt auf 1800 kcal
+    return { protein, carbs, fat, fiber: 35 };
   })();
 
   // ── Derived state ────────────────────────────────────────────────────────────

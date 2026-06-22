@@ -52,7 +52,7 @@ export default async (req) => {
     const macroText = [
       `Kalorienziel Ruhetag: ${calorieGoalRest} kcal`,
       `Trainingstag: Grundwert + tiered eat-back (VO2max/Intervall→90%, >120min→88%, 60-120min→70%, ≤60min→55%)`,
-      `Makroziel Ruhetag/Gehen: Protein 170g | Carbs 120g | Fett 71g`,
+      `Makroziel Ruhetag/Gehen: Protein 160g | Carbs 150g | Fett 62g`,
       `Makroziel Laufen/Kraft: Protein 170g | Carbs 200g | Fett 85g`,
       `Makroziel Zone2 ≥90min / VO2max-Rad: Protein 170g | Carbs 300g | Fett 85g`,
       macroGoals?.macroGoalsRestDay ? `(KI-Ziel Rest: P ${macroGoals.macroGoalsRestDay.proteinG}g | C ${macroGoals.macroGoalsRestDay.carbsG}g | F ${macroGoals.macroGoalsRestDay.fatG}g)` : '',

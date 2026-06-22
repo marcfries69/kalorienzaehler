@@ -130,7 +130,7 @@ export default async (req) => {
     // Ruhetag / nur Gehen:              Protein 170g | Carbs 150g | Fett 85g | Faser 35g
     // Laufen oder Krafttraining:        Protein 170g | Carbs 200g | Fett 85g | Faser 35g
     // Zone 2 ≥ 90 min oder VO2max-Rad: Protein 170g | Carbs 300g | Fett 85g | Faser 35g
-    const macroGoalsRestDay   = { proteinG: 170, carbsG: 120, fatG: 71, fiberG: 35 };
+    const macroGoalsRestDay   = { proteinG: 160, carbsG: 150, fatG: 62, fiberG: 35 };
     const macroGoalsTrainDay  = { proteinG: 170, carbsG: 200, fatG: 85, fiberG: 35 };
     const macroGoalsCycleDay  = { proteinG: 170, carbsG: 300, fatG: 85, fiberG: 35 };
 
@@ -160,7 +160,7 @@ export default async (req) => {
 
 ## FESTE ZIELE (nicht ändern)
 - Kalorien Ruhetag: 1800 kcal | Trainingstag: 1800 + tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%) | VO2max-Tag: TDEE + 90% Strava-kcal
-- Makros Ruhetag/Gehen:   Protein 170g | Carbs 120g | Fett 71g
+- Makros Ruhetag/Gehen:   Protein 160g | Carbs 150g | Fett 62g
 - Makros Laufen/Kraft:    Protein 170g | Carbs 200g | Fett 85g
 - Makros Zone2 ≥90min/VO2max-Rad: Protein 170g | Carbs 300g | Fett 85g
 - TDEE-Differenz Ruhetag: ${deficitVsTdee !== null ? (deficitVsTdee > 0 ? '+' : '') + deficitVsTdee + ' kcal vs. TDEE' : '–'}
