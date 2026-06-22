@@ -116,12 +116,13 @@ export default async (req) => {
     // ── 6. Feste Kalorie- und Makro-Vorgaben ──────────────────────────────────
     // Basis-Kalorienziel (ohne Sport) = 1800 kcal (fix)
     // An Sporttagen: 1800 + tatsächliche Strava-Kalorien (live im Frontend addiert)
+    const MAX_DAILY_KCAL   = 3000; // Tagesziel nie überschreiten, unabhängig vom Trainingsumfang
     const kcalGoalRestDay  = 1800;
     // Tiered eat-back (Ø-Faktor ~0.75): VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%
     // avgActiveDayBurn wird hier mit 0.75 geschätzt (frontend berechnet tagesaktuell exakt)
-    const kcalGoalTrainDay = 1800 + Math.round(avgActiveDayBurn * 0.75);
+    const kcalGoalTrainDay = Math.min(1800 + Math.round(avgActiveDayBurn * 0.75), MAX_DAILY_KCAL);
     // VO2max-Tage: kein Defizit → volles TDEE als Basis (kein Kaloriendefizit, auch nicht im Grundumsatz)
-    const kcalGoalVo2Day   = tdeeBase ? Math.round(tdeeBase) : kcalGoalRestDay + 400;
+    const kcalGoalVo2Day   = Math.min(tdeeBase ? Math.round(tdeeBase) : kcalGoalRestDay + 400, MAX_DAILY_KCAL);
     const kcalGoal         = kcalGoalRestDay;
     const trainDayBonus    = avgActiveDayBurn;
     const deficitVsTdee    = tdeeBase ? tdeeBase - kcalGoalRestDay : null;
@@ -159,7 +160,8 @@ export default async (req) => {
 - BMR: ${bmr ? Math.round(bmr) : '–'} kcal | TDEE Ruhetag: ${tdeeBase ?? '–'} kcal
 
 ## FESTE ZIELE (nicht ändern)
-- Kalorien Ruhetag: 1800 kcal | Trainingstag: 1800 + tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%) | VO2max-Tag: TDEE + 90% Strava-kcal
+- Kalorien Ruhetag: 1800 kcal | Trainingstag: 1800 + tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%) | VO2max-Tag: TDEE + 90% Strava-kcal | Tagesziel max. 3000 kcal (Deckel)
+- Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Makros Ruhetag/Gehen:   Protein 160g | Carbs 150g | Fett 62g
 - Makros Laufen/Kraft:    Protein 170g | Carbs 200g | Fett 85g
 - Makros Zone2 ≥90min/VO2max-Rad: Protein 170g | Carbs 300g | Fett 85g

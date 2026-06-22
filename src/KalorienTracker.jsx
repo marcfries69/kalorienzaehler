@@ -40,6 +40,10 @@ const getEatbackFactor = (training) => {
 const tieredEatback = (training) =>
   Math.round((training?.totalCalories || 0) * getEatbackFactor(training));
 
+// Maximales Tagesziel – unabhängig vom Trainingsumfang nie überschreiten.
+const MAX_DAILY_KCAL = 3000;
+const capDailyGoal = (kcal) => Math.min(Math.round(kcal || 0), MAX_DAILY_KCAL);
+
 // ── Mikronährstoff-Tagesziele (DGE-Referenzwerte) ────────────────────────────
 const MICRO_TARGETS = [
   { key: 'calcium',    label: 'Kalzium',     unit: 'mg',  goal: 1000, color: 'sky',     emoji: '🦴' },
@@ -163,7 +167,7 @@ const KalorienTracker = () => {
           || 1800);
     // Alle Strava-Aktivitäten heute summieren (reagiert auf neue Syncs)
     // Tiered eat-back: je nach Dauer/Intensität 55–90% der Sportkalorien
-    return restBase + tieredEatback(todayTraining);
+    return capDailyGoal(restBase + tieredEatback(todayTraining));
   }, [trainingDays, todayKey, kiResult, calorieGoal]);
 
   // Sportkalorien-Bonus heute (für Anzeige)
@@ -220,7 +224,7 @@ const KalorienTracker = () => {
       const sportKcal  = strava?.totalCalories || 0;
       const sportMin   = strava?.totalMinutes  || 0;
       const sportTypes = strava?.types?.join('+') || '';
-      const dayGoal    = kcalBase + tieredEatback(strava);   // Grundwert + tiered eat-back
+      const dayGoal    = capDailyGoal(kcalBase + tieredEatback(strava));   // Grundwert + tiered eat-back, gedeckelt
       rowGoals.push(dayGoal);
       const delta      = kcal ? kcal - dayGoal : null;
       const deltaLabel = delta !== null ? (delta > 0 ? `+${delta}` : `${delta}`) : '–';
@@ -647,7 +651,7 @@ const KalorienTracker = () => {
       }
     }
 
-    adjustedGoal = Math.round(adjustedGoal);
+    adjustedGoal = capDailyGoal(adjustedGoal);
 
     const remaining = Math.max(0, adjustedGoal - Math.round(alreadyEaten));
     const reason    = reasonParts.length > 0 ? reasonParts.join(' · ') : 'Kein Training heute, kein Übertrag';
@@ -859,7 +863,7 @@ const KalorienTracker = () => {
         // Below threshold – add/update correction entry
         const training = trainingDays.find(t => t.date === dateKey);
         const dayBase  = training?.activities?.some(isVo2Act) ? vo2Base : restBase;
-        const dayGoal  = dayBase + tieredEatback(training);
+        const dayGoal  = capDailyGoal(dayBase + tieredEatback(training));
         const existing = dayMeals.find(m => m.isAutoCorrection);
 
         if (!existing || existing.kcal !== dayGoal) {
@@ -1230,7 +1234,7 @@ const KalorienTracker = () => {
       const isToday_     = d === todayKey;
       const training     = trainingDays.find(t => t.date === d);
       const dayBase      = getDayBase(training);
-      const dayGoal      = dayBase + tieredEatback(training);
+      const dayGoal      = capDailyGoal(dayBase + tieredEatback(training));
       // Fallback display-only (no backfill entry yet, day < 1500)
       const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
       const kcalEff      = useGoal ? dayGoal : kcalLogged;
@@ -1255,7 +1259,7 @@ const KalorienTracker = () => {
       const meals        = history[d] || [];
       const training     = trainingDays.find(t => t.date === d);
       const dayBase      = getDayBase(training);
-      const dayGoal      = dayBase + tieredEatback(training);
+      const dayGoal      = capDailyGoal(dayBase + tieredEatback(training));
       const kcalLogged   = Math.round(meals.reduce((a, m) => a + (m.kcal || 0), 0));
       const isToday_     = d === todayKey;
       const hasCorrEntry = meals.some(m => m.isAutoCorrection);
@@ -1382,6 +1386,8 @@ Berücksichtige dabei:
 - Mein primäres Ziel ist Fettreduktion bei Erhalt der Muskelmasse und Regenerationsfähigkeit
 - Ich fahre hauptsächlich Radsport (Strava) mit gelegentlichem Kraft- und Lauftraining
 - Kalorienziel Ruhetag: 1800 kcal | Sporttage: tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
+- Tagesziel ist auf max. 3000 kcal gedeckelt, unabhängig vom Trainingsumfang
+- Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Tägliches Defizit soll 200–500 kcal bleiben (nie über 500!)
 - RED-S-Risiko vermeiden: kein extremes Defizit an Intensivtagen
 
@@ -1597,7 +1603,7 @@ ${trainingDays.filter(d => {
               const restBase = dayHasVo2
                 ? ((kiResult?.kcalGoalVo2Day || 0) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : 0) || 2300)
                 : (kiResult?.kcalGoalRestDay || 1800);
-              const effectiveGoal = isToday ? effectiveTodayGoal : (restBase + tieredEatback(dayStrava));
+              const effectiveGoal = isToday ? effectiveTodayGoal : capDailyGoal(restBase + tieredEatback(dayStrava));
               const isOver = totals.kcal > effectiveGoal;
               return (
             <div className="glass rounded-3xl p-6 mb-4 shadow-xl">
@@ -2636,7 +2642,7 @@ ${trainingDays.filter(d => {
                       const todayT = trainingDays.find(d => d.date === todayKey);
                       const todayBurn = todayT?.totalCalories || 0;
                       const todayEatback = tieredEatback(todayT);
-                      const todayGoal = base + todayEatback;
+                      const todayGoal = capDailyGoal(base + todayEatback);
                       return (
                         <div className="grid grid-cols-2 gap-2">
                           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
