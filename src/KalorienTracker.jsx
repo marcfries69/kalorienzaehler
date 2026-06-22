@@ -40,9 +40,10 @@ const getEatbackFactor = (training) => {
 const tieredEatback = (training) =>
   Math.round((training?.totalCalories || 0) * getEatbackFactor(training));
 
-// Maximales Tagesziel – unabhängig vom Trainingsumfang nie überschreiten.
+// Tagesziel-Grenzen: nie unter 2000 (Schlaf/Regeneration) und nie über 3000 kcal.
+const MIN_DAILY_KCAL = 2000;
 const MAX_DAILY_KCAL = 3000;
-const capDailyGoal = (kcal) => Math.min(Math.round(kcal || 0), MAX_DAILY_KCAL);
+const capDailyGoal = (kcal) => Math.min(Math.max(Math.round(kcal || 0), MIN_DAILY_KCAL), MAX_DAILY_KCAL);
 
 // ── Mikronährstoff-Tagesziele (DGE-Referenzwerte) ────────────────────────────
 const MICRO_TARGETS = [
@@ -1386,7 +1387,7 @@ Berücksichtige dabei:
 - Mein primäres Ziel ist Fettreduktion bei Erhalt der Muskelmasse und Regenerationsfähigkeit
 - Ich fahre hauptsächlich Radsport (Strava) mit gelegentlichem Kraft- und Lauftraining
 - Kalorienziel Ruhetag: 1800 kcal | Sporttage: tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
-- Tagesziel ist auf max. 3000 kcal gedeckelt, unabhängig vom Trainingsumfang
+- Tagesziel ist begrenzt auf 2000–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
 - Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Tägliches Defizit soll 200–500 kcal bleiben (nie über 500!)
 - RED-S-Risiko vermeiden: kein extremes Defizit an Intensivtagen
