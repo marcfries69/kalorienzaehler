@@ -131,15 +131,15 @@ export default async (req) => {
     const deficitVsTdee    = tdeeBase ? tdeeBase - kcalGoalRestDay : null;
 
     // Feste Makro-Gramm-Ziele (nicht prozentual) – Carbs nach Aktivitätstyp:
-    // Ruhetag / nur Gehen:              Protein 170g | Carbs 150g | Fett 85g | Faser 35g
-    // Laufen oder Krafttraining:        Protein 170g | Carbs 200g | Fett 85g | Faser 35g
-    // Zone 2 ≥ 90 min oder VO2max-Rad: Protein 170g | Carbs 300g | Fett 85g | Faser 35g
-    const macroGoalsRestDay   = { proteinG: 160, carbsG: 150, fatG: 62, fiberG: 35 };
-    const macroGoalsTrainDay  = { proteinG: 170, carbsG: 200, fatG: 85, fiberG: 35 };
-    const macroGoalsCycleDay  = { proteinG: 170, carbsG: 300, fatG: 85, fiberG: 35 };
+    // Ruhetag / nur Gehen:              Protein 150g | Carbs 150g | Fett 66g | Faser 35g
+    // Laufen oder Krafttraining:        Protein 150g | Carbs 200g | Fett 85g | Faser 35g
+    // Zone 2 ≥ 90 min oder VO2max-Rad: Protein 150g | Carbs 300g | Fett 85g | Faser 35g
+    const macroGoalsRestDay   = { proteinG: 150, carbsG: 150, fatG: 66, fiberG: 35 };
+    const macroGoalsTrainDay  = { proteinG: 150, carbsG: 200, fatG: 85, fiberG: 35 };
+    const macroGoalsCycleDay  = { proteinG: 150, carbsG: 300, fatG: 85, fiberG: 35 };
 
-    const proteinMinG  = 160;
-    const proteinPerKg = bw ? +(160 / bw).toFixed(1) : 2.1;
+    const proteinMinG  = 150;
+    const proteinPerKg = bw ? +(150 / bw).toFixed(1) : 1.95;
 
     // Wöchentliches Defizit (Schätzung)
     const trainingDaysPerWeek = activeDays7;
@@ -166,9 +166,9 @@ export default async (req) => {
 - Kalorien Ruhetag: 1800 kcal | Trainingstag: 1800 + tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%) | VO2max-Tag: TDEE + 90% Strava-kcal
 - Tagesziel ist begrenzt auf 2000–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
 - Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
-- Makros Ruhetag/Gehen:   Protein 160g | Carbs 150g | Fett 62g
-- Makros Laufen/Kraft:    Protein 170g | Carbs 200g | Fett 85g
-- Makros Zone2 ≥90min/VO2max-Rad: Protein 170g | Carbs 300g | Fett 85g
+- Makros Ruhetag/Gehen:   Protein 150g | Carbs 150g | Fett 66g
+- Makros Laufen/Kraft:    Protein 150g | Carbs 200g | Fett 85g
+- Makros Zone2 ≥90min/VO2max-Rad: Protein 150g | Carbs 300g | Fett 85g
 - TDEE-Differenz Ruhetag: ${deficitVsTdee !== null ? (deficitVsTdee > 0 ? '+' : '') + deficitVsTdee + ' kcal vs. TDEE' : '–'}
 
 ## KÖRPER-TREND

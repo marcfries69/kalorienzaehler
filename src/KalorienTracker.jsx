@@ -133,7 +133,7 @@ const KalorienTracker = () => {
       if (r && !r.kcalGoalRestDay && !r.kcalGoal) return null;
       // Invalidate cache if base calorie target changed (now 1800), VO2max field missing,
       // or rest-day macros are stale (now Carbs 150g / Fett 62g)
-      const staleRestMacros = r?.macroGoalsRestDay && r.macroGoalsRestDay.carbsG !== 150;
+      const staleRestMacros = r?.macroGoalsRestDay && (r.macroGoalsRestDay.carbsG !== 150 || r.macroGoalsRestDay.proteinG !== 150);
       if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 1800 || !('kcalGoalVo2Day' in r) || staleRestMacros)) {
         localStorage.removeItem('ki-result');
         return null;
@@ -773,10 +773,10 @@ const KalorienTracker = () => {
   const todayIsTrainingDay = todayHasStrength || todayHasRun || todayLongRide || todayVo2maxRide;
 
   const macroGoalGrams = (() => {
-    let protein = 170, carbs, fat;
+    let protein = 150, carbs, fat;
     if (todayLongRide || todayVo2maxRide)     { carbs = 300; fat = 85; } // Zone 2 ≥90 min oder VO2max
     else if (todayHasRun || todayHasStrength) { carbs = 200; fat = 85; }
-    else                                       { protein = 160; carbs = 150; fat = 62; } // Ruhetag/Gehen → passt auf 1800 kcal
+    else                                       { carbs = 150; fat = 66; } // Ruhetag/Gehen → passt auf 1800 kcal
     return { protein, carbs, fat, fiber: 35 };
   })();
 
@@ -1376,7 +1376,7 @@ const KalorienTracker = () => {
     // Makroziele
     const macroLine = kiResult?.macroGoalsRestDay
       ? `Ruhetag: ${kiResult.kcalGoalRestDay} kcal | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
-Trainingstag: ${kiResult.kcalGoalRestDay} + tiered Sportkalorien | P 170g | C 200g | F 85g
+Trainingstag: ${kiResult.kcalGoalRestDay} + tiered Sportkalorien | P 150g | C 200g | F 85g
 Zone2/VO2max-Rad: | C 300g | F 85g`
       : `Kalorienziel: ${calorieGoal} kcal`;
 
