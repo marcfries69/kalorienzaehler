@@ -1,118 +1,83 @@
-// Netlify Function – KI-Coach Analyse: Ernährung × Körperdaten
-export default async (req, context) => {
+// Netlify Function – KI-Coach Analyse via Claude (Anthropic)
+export default async (req) => {
   if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+    return Response.json({ error: 'Method not allowed' }, { status: 405 });
   }
 
   try {
-    const apiKey = Netlify.env.get('GOOGLE_API_KEY');
-
-    if (!apiKey) {
-      return new Response(
-        JSON.stringify({ error: 'API Key nicht konfiguriert' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    const apiKey = Netlify.env.get('ANTHROPIC_API_KEY');
+    if (!apiKey) return Response.json({ error: 'ANTHROPIC_API_KEY fehlt' }, { status: 500 });
 
     const { nutritionSummary, bodyMeasurements, bodyGoals } = await req.json();
-
-    if (!nutritionSummary || !bodyMeasurements) {
-      return new Response(
-        JSON.stringify({ error: 'Ernährungs- oder Körperdaten fehlen' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    console.log('🤖 Starte Coach-Analyse...');
+    if (!nutritionSummary || !bodyMeasurements)
+      return Response.json({ error: 'Ernährungs- oder Körperdaten fehlen' }, { status: 400 });
 
     const nutritionText = nutritionSummary.map(d =>
-      `${d.date}: ${d.kcal} kcal, Protein ${d.protein}g, Carbs ${d.carbs}g, Fett ${d.fat}g, Ballaststoffe ${d.fiber}g (${d.mealCount} Mahlzeiten)`
+      `${d.date}: ${d.kcal} kcal, P ${d.protein}g, C ${d.carbs}g, F ${d.fat}g, Faser ${d.fiber}g`
     ).join('\n');
 
     const bodyText = bodyMeasurements.map(m =>
-      `${m.date}: Gewicht ${m.weight ?? '-'} kg, Fett ${m.fatPct ?? '-'}%, Muskeln ${m.musclePct ?? '-'}%, Viszerales Fett ${m.visceralFat ?? '-'}`
+      `${m.date}: ${m.weight ?? '-'} kg, Fett ${m.fatPct ?? '-'}%, Muskeln ${m.musclePct ?? '-'}%, Viszeral ${m.visceralFat ?? '-'}`
     ).join('\n');
 
     const goalsText = bodyGoals
-      ? `Zielgewicht: ${bodyGoals.weight ?? '-'} kg, Ziel-Fettanteil: ${bodyGoals.fatPct ?? '-'}%, Ziel-Muskelmasse: ${bodyGoals.musclePct ?? '-'}%, Ziel-Viszerales Fett: ${bodyGoals.visceralFat ?? '-'}`
-      : 'Keine Zielwerte definiert';
+      ? `Ziel: ${bodyGoals.weight ?? '-'} kg, Fett ${bodyGoals.fatPct ?? '-'}%, Muskeln ${bodyGoals.musclePct ?? '-'}%, Viszeral ${bodyGoals.visceralFat ?? '-'}`
+      : 'Keine Zielwerte';
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `Du bist ein professioneller Ernährungs- und Fitness-Coach. Analysiere die folgenden Daten und gib konkrete, personalisierte Empfehlungen.
+    const prompt = `Du bist ein professioneller Ernährungs- und Fitness-Coach. Analysiere die Daten und gib konkrete Empfehlungen.
 
-=== ERNÄHRUNGSDATEN (letzte Tage) ===
+ERNÄHRUNG:
 ${nutritionText}
 
-=== KÖRPERDATEN (Messungen) ===
+KÖRPERDATEN:
 ${bodyText}
 
-=== ZIELWERTE ===
+ZIELE:
 ${goalsText}
 
-Analysiere:
-1. Korrelationen zwischen Ernährung und Körperkomposition
-2. Trends in den Körperdaten
-3. Ob die Ernährung die Ziele unterstützt
-4. Konkrete Verbesserungspotenziale
-
-Antworte NUR mit einem JSON-Objekt in diesem exakten Format, ohne Markdown:
+Antworte NUR mit diesem JSON – kein Markdown:
 {
-  "summary": "2-3 Sätze Gesamtfazit über den aktuellen Stand und Fortschritt",
+  "summary": "2-3 Sätze Gesamtfazit",
   "recommendations": [
     {
-      "title": "Kurzer Titel der Empfehlung",
-      "detail": "Konkrete, umsetzbare Erklärung (2-3 Sätze)",
-      "priority": "high" | "medium" | "low"
+      "title": "Kurzer Titel",
+      "detail": "Konkrete Erklärung (2-3 Sätze)",
+      "priority": "high"
     }
   ]
 }
 
-Gib 3-5 Empfehlungen. Sei spezifisch und beziehe dich auf die tatsächlichen Zahlen.`
-            }]
-          }]
-        })
-      }
-    );
+Gib 3-5 Empfehlungen. Beziehe dich auf die tatsächlichen Zahlen.`;
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Gemini API Error:', errorData);
-      return new Response(
-        JSON.stringify({ error: errorData.error?.message || 'API-Fehler' }),
-        { status: response.status, headers: { 'Content-Type': 'application/json' } }
-      );
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      'claude-haiku-4-5',
+        max_tokens: 1024,
+        messages:   [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Claude API ${res.status}: ${err.slice(0, 200)}`);
     }
 
-    const data = await response.json();
-    const text = data.candidates[0].content.parts[0].text.trim();
-    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(jsonText);
+    const data    = await res.json();
+    const raw     = data.content?.[0]?.text || '';
+    const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const match   = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Kein gültiges JSON von KI erhalten');
 
-    console.log('✅ Coach-Analyse abgeschlossen:', parsed.recommendations?.length, 'Empfehlungen');
+    return Response.json(JSON.parse(match[0]));
 
-    return new Response(
-      JSON.stringify(parsed),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
-      }
-    );
-
-  } catch (error) {
-    console.error('Function Error:', error);
-    return new Response(
-      JSON.stringify({ error: error.message || 'Unbekannter Fehler' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+  } catch (err) {
+    console.error('coach-analysis error:', err.message);
+    return Response.json({ error: err.message }, { status: 500 });
   }
 };
