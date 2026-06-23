@@ -3,6 +3,24 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[functions]
+  node_bundler = "esbuild"
+
+[functions."suggest-meals"]
+  timeout = 26
+
+[functions."ki-adjust"]
+  timeout = 26
+
+[functions."coach-analysis"]
+  timeout = 26
+
+[functions."cycling-nutrition"]
+  timeout = 26
+
+[functions."sync-ride"]
+  timeout = 20
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

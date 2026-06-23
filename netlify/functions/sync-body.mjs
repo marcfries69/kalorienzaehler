@@ -12,8 +12,8 @@ const SUPABASE_URL     = 'https://fwsunbqvkvudmgjkjsbh.supabase.co';
 const SUPABASE_ANON    = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3c3VuYnF2a3Z1ZG1namtqc2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1ODY0OTEsImV4cCI6MjA4NzE2MjQ5MX0.5bZOef0bZL4U4eAwthM3JZas_AsjDWgsJwKWjO-RB3I';
 
 export default async (req) => {
-  const email    = process.env.BLOOD_EMAIL;
-  const password = process.env.BLOOD_PASSWORD;
+  const email    = Netlify.env.get('BLOOD_EMAIL');
+  const password = Netlify.env.get('BLOOD_PASSWORD');
 
   if (!email || !password) {
     return Response.json(
@@ -47,9 +47,9 @@ export default async (req) => {
 
   // ── 2. Fetch body_composition ───────────────────────────────────────────────
   const cols = [
-    'measured_at', 'weight', 'body_fat_pct', 'fat_free_pct',
-    'visceral_fat', 'muscle_mass_calc', 'bmi', 'body_water_pct',
-    'bmr', 'metabolic_age',
+    'measured_at', 'weight', 'body_fat_pct', 'fat_free_mass',
+    'visceral_fat', 'muscle_mass', 'bmi', 'body_water_pct',
+    'bmr', 'metabolic_age', 'bone_mass', 'raw_data',
   ].join(',');
 
   const dataRes = await fetch(
@@ -74,19 +74,40 @@ export default async (req) => {
   const rows = await dataRes.json();
 
   // ── 3. Map to Kalorienzähler format ────────────────────────────────────────
-  const measurements = rows.map(e => ({
-    date:        (e.measured_at || '').substring(0, 10),
-    weight:      e.weight       != null ? +e.weight.toFixed(1)       : null,
-    fatPct:      e.body_fat_pct != null ? +e.body_fat_pct.toFixed(1) : null,
-    musclePct:   e.fat_free_pct != null ? +e.fat_free_pct.toFixed(1) : null,  // fat-free mass %
-    muscleMassKg:e.muscle_mass_calc != null ? +e.muscle_mass_calc.toFixed(1) : null,
-    visceralFat: e.visceral_fat != null ? +e.visceral_fat.toFixed(1) : null,
-    bmi:         e.bmi          != null ? +e.bmi.toFixed(1)          : null,
-    bodyWaterPct:e.body_water_pct != null ? +e.body_water_pct.toFixed(1) : null,
-    bmr:         e.bmr          != null ? Math.round(e.bmr)          : null,
-    metabolicAge:e.metabolic_age,
-    source:      'blood-analytics',
-  }));
+  const measurements = rows.map(e => {
+    const rd = e.raw_data || {};
+    const extra = rd.extra || {};
+
+    // Prefer raw_data values (exact as Blood Analytics displays them)
+    // Fallback: compute from base columns
+    const musclePct   = rd.muscle_mass_pct   != null ? +rd.muscle_mass_pct.toFixed(1)
+                      : (e.muscle_mass != null && e.weight > 0)
+                        ? +((e.muscle_mass / e.weight) * 100).toFixed(1) : null;
+    const fatFreePct  = rd.fat_free_mass_pct != null ? +rd.fat_free_mass_pct.toFixed(1)
+                      : (e.fat_free_mass != null && e.weight > 0)
+                        ? +((e.fat_free_mass / e.weight) * 100).toFixed(1) : null;
+
+    return {
+      date:              (e.measured_at || '').substring(0, 10),
+      weight:            e.weight        != null ? +e.weight.toFixed(1)        : null,
+      fatPct:            e.body_fat_pct  != null ? +e.body_fat_pct.toFixed(1)  : null,
+      musclePct,                                      // muscle mass % (wie Blood Analytics zeigt)
+      fatFreePct,                                     // fat-free / lean body mass %
+      muscleMassKg:      e.muscle_mass   != null ? +e.muscle_mass.toFixed(1)   : null,
+      fatFreeMassKg:     e.fat_free_mass != null ? +e.fat_free_mass.toFixed(1) : null,
+      visceralFat:       e.visceral_fat  != null ? +e.visceral_fat.toFixed(1)  : null,
+      bmi:               e.bmi           != null ? +e.bmi.toFixed(1)           : null,
+      bodyWaterPct:      e.body_water_pct!= null ? +e.body_water_pct.toFixed(1): null,
+      boneMassKg:        e.bone_mass     != null ? +e.bone_mass.toFixed(1)     : null,
+      bmr:               e.bmr           != null ? Math.round(e.bmr)           : null,
+      metabolicAge:      e.metabolic_age,
+      // Extra fields from raw_data
+      skeletalMusclePct: extra.skeletal_muscle_pct != null ? +extra.skeletal_muscle_pct.toFixed(1) : null,
+      proteinPct:        extra.protein_pct         != null ? +extra.protein_pct.toFixed(1)         : null,
+      subcutFatPct:      extra.subcutaneous_fat_pct!= null ? +extra.subcutaneous_fat_pct.toFixed(1): null,
+      source: 'blood-analytics',
+    };
+  });
 
   return Response.json({
     measurements,
