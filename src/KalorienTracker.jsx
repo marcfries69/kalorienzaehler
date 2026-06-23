@@ -627,12 +627,12 @@ const KalorienTracker = () => {
       const factor    = getEatbackFactor(today);
       const pctAbzug  = Math.round((1 - factor) * 100);
       trainingBonus = tieredEatback(today);
-      adjustedGoal  = restBase + trainingBonus;
+      adjustedGoal  = capDailyGoal(restBase + trainingBonus);
       const basisLabel = todayHasVo2Opt ? 'TDEE-Basis (kein Defizit)' : 'Basis';
       reasonParts.push(`${todayHasVo2Opt ? 'VO2max-Tag' : 'Trainingstag'}: ${adjustedGoal} kcal (${restBase} ${basisLabel} + ${trainingBonus} von ${rawBurn} Strava −${pctAbzug}%, ${today.totalMinutes} Min)`);
     } else {
-      // Rest day
-      adjustedGoal = kiResult?.kcalGoalRestDay || 1800;
+      // Rest day – nie unter 2000 kcal (Schlaf/Regeneration)
+      adjustedGoal = capDailyGoal(kiResult?.kcalGoalRestDay || 1800);
       reasonParts.push(`Ruhetag: ${adjustedGoal} kcal`);
     }
 
@@ -641,7 +641,7 @@ const KalorienTracker = () => {
     const yesterdayMeals = history[yesterday] || [];
     if (yesterdayMeals.length > 0) {
       const yesterdayKcal = Math.round(yesterdayMeals.reduce((s, m) => s + (m.kcal || 0), 0));
-      const delta = yesterdayKcal - base;
+      const delta = yesterdayKcal - adjustedGoal;
       if (Math.abs(delta) > 100) {
         const carry = Math.round(delta * -0.25); // compensate 25% of yesterday's delta
         const cappedCarry = Math.max(-200, Math.min(200, carry));
@@ -1375,8 +1375,8 @@ const KalorienTracker = () => {
 
     // Makroziele
     const macroLine = kiResult?.macroGoalsRestDay
-      ? `Ruhetag: ${kiResult.kcalGoalRestDay} kcal | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
-Trainingstag: ${kiResult.kcalGoalRestDay} + tiered Sportkalorien | P 150g | C 200g | F 85g
+      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
+Trainingstag: ${capDailyGoal(kiResult.kcalGoalRestDay)} + tiered Sportkalorien (Ziel begrenzt auf 2000–3000 kcal) | P 150g | C 200g | F 85g
 Zone2/VO2max-Rad: | C 300g | F 85g`
       : `Kalorienziel: ${calorieGoal} kcal`;
 
@@ -2640,6 +2640,7 @@ ${trainingDays.filter(d => {
                     {/* Day-type calorie targets */}
                     {kiResult.kcalGoalRestDay && (() => {
                       const base = kiResult.kcalGoalRestDay;
+                      const restGoal = capDailyGoal(base);
                       const todayT = trainingDays.find(d => d.date === todayKey);
                       const todayBurn = todayT?.totalCalories || 0;
                       const todayEatback = tieredEatback(todayT);
@@ -2648,14 +2649,14 @@ ${trainingDays.filter(d => {
                         <div className="grid grid-cols-2 gap-2">
                           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
                             <p className="text-xs text-slate-500 mb-1">🛋️ Ruhetag</p>
-                            <p className="text-xl font-bold text-slate-700">{base}</p>
+                            <p className="text-xl font-bold text-slate-700">{restGoal}</p>
                             <p className="text-xs text-slate-400">kcal Basis</p>
                           </div>
                           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
                             <p className="text-xs text-emerald-600 mb-1">🏃 Heute</p>
                             <p className="text-xl font-bold text-emerald-700">{todayGoal}</p>
                             <p className="text-xs text-emerald-500">
-                              {todayBurn > 0 ? `${base} + ${todayEatback} (von ${todayBurn} Strava, ${Math.round(getEatbackFactor(todayT)*100)}%)` : `${base} kcal · kein Training`}
+                              {todayBurn > 0 ? `${base} + ${todayEatback} (von ${todayBurn} Strava, ${Math.round(getEatbackFactor(todayT)*100)}%)` : `${restGoal} kcal · kein Training`}
                             </p>
                           </div>
                         </div>
@@ -2699,8 +2700,14 @@ ${trainingDays.filter(d => {
                         {kiResult.deficitApplied !== undefined && <div className="flex justify-between"><span>Defizit{kiResult.deficitApplied === 0 ? ' (RED-S: Erhaltung)' : ''}</span><span className="font-medium text-slate-600">−{kiResult.deficitApplied} kcal</span></div>}
                         <div className="flex justify-between border-t border-slate-200 pt-1 mt-1">
                           <span className="font-semibold text-slate-600">Basis Ruhetag</span>
-                          <span className="font-bold text-slate-700">{kiResult.kcalGoalRestDay} kcal</span>
+                          <span className="font-bold text-slate-700">{capDailyGoal(kiResult.kcalGoalRestDay)} kcal</span>
                         </div>
+                        {kiResult.kcalGoalRestDay < MIN_DAILY_KCAL && (
+                          <div className="flex justify-between text-amber-600">
+                            <span>↳ Sicherheits-Minimum angehoben</span>
+                            <span className="font-medium">{kiResult.kcalGoalRestDay} → {MIN_DAILY_KCAL}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between text-emerald-600">
                           <span>+ Strava-Kalorien (live)</span>
                           <span className="font-medium">= {effectiveTodayGoal} kcal heute</span>
