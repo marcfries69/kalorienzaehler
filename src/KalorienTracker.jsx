@@ -131,10 +131,10 @@ const KalorienTracker = () => {
       const r = JSON.parse(localStorage.getItem('ki-result') || 'null');
       // Discard stale results where calories were null (old bug)
       if (r && !r.kcalGoalRestDay && !r.kcalGoal) return null;
-      // Invalidate cache if base calorie target changed (now 1800), VO2max field missing,
-      // or rest-day macros are stale (now Carbs 150g / Fett 62g)
+      // Invalidate cache if base calorie target changed (now 1800), if it still carries the
+      // removed kcalGoalVo2Day field (old VO2max-base scheme), or rest-day macros are stale
       const staleRestMacros = r?.macroGoalsRestDay && (r.macroGoalsRestDay.carbsG !== 150 || r.macroGoalsRestDay.proteinG !== 150);
-      if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 1800 || !('kcalGoalVo2Day' in r) || staleRestMacros)) {
+      if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 1800 || 'kcalGoalVo2Day' in r || staleRestMacros)) {
         localStorage.removeItem('ki-result');
         return null;
       }
@@ -151,21 +151,13 @@ const KalorienTracker = () => {
   const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
 
   // ── Auto-computed effective daily goal ───────────────────────────────────────
-  // Formel: BMR + NEAT + TEF − Defizit [+ tatsächliche Strava-Kalorien heute]
-  // Basis (kcalGoalRestDay) kommt vom KI-Backend, Sportkalorien werden live addiert.
+  // Formel: Ruhetag immer 2000 kcal. Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag).
+  // VO2max-Schutz läuft ausschließlich über den 90%-Eat-back-Tier, nicht über eine erhöhte Basis.
   const effectiveTodayGoal = useMemo(() => {
-    // VO2max-Erkennung: kein Defizit an VO2max-Tagen (volles TDEE als Basis)
     const todayTraining = trainingDays.find(d => d.date === todayKey);
-    const todayActs = todayTraining?.activities || [];
-    const isRide = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
-    const isVo2 = a => isRide(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
-    const hasTodayVo2max = todayActs.some(isVo2);
-
-    const restBase = hasTodayVo2max
-      ? ((kiResult?.kcalGoalVo2Day > 0 ? kiResult.kcalGoalVo2Day : null) || Math.round((kiResult?.tdeeRestDay||0)) || 2300)
-      : ((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
-          || (calorieGoal > 0 ? calorieGoal : null)
-          || 1800);
+    const restBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
+      || (calorieGoal > 0 ? calorieGoal : null)
+      || 1800;
     // Alle Strava-Aktivitäten heute summieren (reagiert auf neue Syncs)
     // Tiered eat-back: je nach Dauer/Intensität 55–90% der Sportkalorien
     return capDailyGoal(restBase + tieredEatback(todayTraining));
@@ -615,21 +607,15 @@ const KalorienTracker = () => {
     let reasonParts   = [];
 
     if (today && today.totalCalories > 0) {
-      // Training day: Basis + tatsächliche Strava-Kalorien heute (individuell)
-      // An VO2max-Tagen: volles TDEE als Basis (kein Defizit)
-      const _isRideOpt = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
-      const _isVo2Opt  = a => _isRideOpt(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
-      const todayHasVo2Opt = (today.activities||[]).some(_isVo2Opt);
-      const restBase = todayHasVo2Opt
-        ? ((kiResult?.kcalGoalVo2Day || 0) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : 0) || 2300)
-        : (kiResult?.kcalGoalRestDay || 1800);
+      // Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag). VO2max-Schutz
+      // läuft über den 90%-Eat-back-Tier (getEatbackFactor), nicht über eine erhöhte Basis.
+      const restBase  = kiResult?.kcalGoalRestDay || 1800;
       const rawBurn   = today.totalCalories;
       const factor    = getEatbackFactor(today);
       const pctAbzug  = Math.round((1 - factor) * 100);
       trainingBonus = tieredEatback(today);
       adjustedGoal  = capDailyGoal(restBase + trainingBonus);
-      const basisLabel = todayHasVo2Opt ? 'TDEE-Basis (kein Defizit)' : 'Basis';
-      reasonParts.push(`${todayHasVo2Opt ? 'VO2max-Tag' : 'Trainingstag'}: ${adjustedGoal} kcal (${restBase} ${basisLabel} + ${trainingBonus} von ${rawBurn} Strava −${pctAbzug}%, ${today.totalMinutes} Min)`);
+      reasonParts.push(`Trainingstag: ${adjustedGoal} kcal (${restBase} Basis + ${trainingBonus} von ${rawBurn} Strava −${pctAbzug}%, ${today.totalMinutes} Min)`);
     } else {
       // Rest day – nie unter 2000 kcal (Schlaf/Regeneration)
       adjustedGoal = capDailyGoal(kiResult?.kcalGoalRestDay || 1800);
@@ -835,10 +821,6 @@ const KalorienTracker = () => {
   // wenn kiResult verfügbar wird (z.B. nach ki-adjust API-Aufruf).
   useEffect(() => {
     const restBase  = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
-    const vo2Base   = (kiResult?.kcalGoalVo2Day  > 0 ? kiResult.kcalGoalVo2Day  : null)
-                   || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : restBase + 400);
-    const isRideAct = a => { const t = (a.type || '').toLowerCase(); return t.includes('ride') || t.includes('cycling') || t.includes('virtual'); };
-    const isVo2Act  = a => isRideAct(a) && /vo2|intervall|interval|hiit/i.test(a.name || '');
 
     let freshHistory;
     try { freshHistory = JSON.parse(localStorage.getItem('history-data') || '{}'); } catch { return; }
@@ -863,8 +845,7 @@ const KalorienTracker = () => {
       } else {
         // Below threshold – add/update correction entry
         const training = trainingDays.find(t => t.date === dateKey);
-        const dayBase  = training?.activities?.some(isVo2Act) ? vo2Base : restBase;
-        const dayGoal  = capDailyGoal(dayBase + tieredEatback(training));
+        const dayGoal  = capDailyGoal(restBase + tieredEatback(training));
         const existing = dayMeals.find(m => m.isAutoCorrection);
 
         if (!existing || existing.kcal !== dayGoal) {
@@ -1084,7 +1065,7 @@ const KalorienTracker = () => {
             bodyMeasurements,
             bodyGoals,
             trainingDays,
-            calorieGoalRest: kiResult?.kcalGoalRestDay || calorieGoal || 1800,
+            calorieGoalRest: capDailyGoal(kiResult?.kcalGoalRestDay || calorieGoal || 1800),
             macroGoals: kiResult,
             todayDate: todayKey,
             todayMeals,
@@ -1219,10 +1200,6 @@ const KalorienTracker = () => {
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
     // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
     const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
-    const vo2Base     = (kiResult?.kcalGoalVo2Day  > 0 ? kiResult.kcalGoalVo2Day  : null) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : restBase + 400);
-    const isRideAct   = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
-    const isVo2Act    = a => isRideAct(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
-    const getDayBase  = (training) => training?.activities?.some(isVo2Act) ? vo2Base : restBase;
 
     const tracked = days;
     if (tracked.length === 0) return null;
@@ -1234,8 +1211,7 @@ const KalorienTracker = () => {
       const realKcal     = hasCorrEntry ? meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0) : kcalLogged;
       const isToday_     = d === todayKey;
       const training     = trainingDays.find(t => t.date === d);
-      const dayBase      = getDayBase(training);
-      const dayGoal      = capDailyGoal(dayBase + tieredEatback(training));
+      const dayGoal      = capDailyGoal(restBase + tieredEatback(training));
       // Fallback display-only (no backfill entry yet, day < 1500)
       const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
       const kcalEff      = useGoal ? dayGoal : kcalLogged;
@@ -1259,8 +1235,7 @@ const KalorienTracker = () => {
     const dayData = days.map(d => {
       const meals        = history[d] || [];
       const training     = trainingDays.find(t => t.date === d);
-      const dayBase      = getDayBase(training);
-      const dayGoal      = capDailyGoal(dayBase + tieredEatback(training));
+      const dayGoal      = capDailyGoal(restBase + tieredEatback(training));
       const kcalLogged   = Math.round(meals.reduce((a, m) => a + (m.kcal || 0), 0));
       const isToday_     = d === todayKey;
       const hasCorrEntry = meals.some(m => m.isAutoCorrection);
@@ -1375,8 +1350,8 @@ const KalorienTracker = () => {
 
     // Makroziele
     const macroLine = kiResult?.macroGoalsRestDay
-      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
-Trainingstag: ${capDailyGoal(kiResult.kcalGoalRestDay)} + tiered Sportkalorien (Ziel begrenzt auf 2000–3000 kcal) | P 150g | C 200g | F 85g
+      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal (immer 2000) | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
+Trainingstag: ${kiResult.kcalGoalRestDay} kcal Basis + Strava-kcal inkl. tiered eat-back (Ziel begrenzt auf 2000–3000 kcal) | P 150g | C 200g | F 85g
 Zone2/VO2max-Rad: | C 300g | F 85g`
       : `Kalorienziel: ${calorieGoal} kcal`;
 
@@ -1386,7 +1361,7 @@ Zone2/VO2max-Rad: | C 300g | F 85g`
 Berücksichtige dabei:
 - Mein primäres Ziel ist Fettreduktion bei Erhalt der Muskelmasse und Regenerationsfähigkeit
 - Ich fahre hauptsächlich Radsport (Strava) mit gelegentlichem Kraft- und Lauftraining
-- Kalorienziel Ruhetag: 1800 kcal | Sporttage: tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
+- Ruhetag: immer 2000 kcal | Sporttage: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
 - Tagesziel ist begrenzt auf 2000–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
 - Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Tägliches Defizit soll 200–500 kcal bleiben (nie über 500!)
@@ -1594,16 +1569,9 @@ ${trainingDays.filter(d => {
 
             {/* Summary card */}
             {(() => {
-              // Formel: Basis + tatsächliche Strava-Kalorien des jeweiligen Tages
-              // An VO2max-Tagen: kein Defizit (volles TDEE als Basis)
+              // Formel: Ruhetag immer 2000 kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag)
               const dayStrava = trainingDays.find(d => d.date === selectedDate);
-              const dayStravaKcal = dayStrava?.totalCalories || 0;
-              const _isRide = a => { const t=(a.type||'').toLowerCase(); return t.includes('ride')||t.includes('cycling')||t.includes('virtual'); };
-              const _isVo2  = a => _isRide(a) && /vo2|intervall|interval|hiit/i.test(a.name||'');
-              const dayHasVo2 = dayStrava?.activities?.some(_isVo2) ?? false;
-              const restBase = dayHasVo2
-                ? ((kiResult?.kcalGoalVo2Day || 0) || (kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : 0) || 2300)
-                : (kiResult?.kcalGoalRestDay || 1800);
+              const restBase = kiResult?.kcalGoalRestDay || 1800;
               const effectiveGoal = isToday ? effectiveTodayGoal : capDailyGoal(restBase + tieredEatback(dayStrava));
               const isOver = totals.kcal > effectiveGoal;
               return (
