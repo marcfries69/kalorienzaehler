@@ -114,8 +114,9 @@ export default async (req) => {
     const redSRisk = (muscleLoss || muscleLossLong) && (rapidWeightLoss || highTrainingLoad);
 
     // ── 6. Feste Kalorie- und Makro-Vorgaben ──────────────────────────────────
-    // Basis-Kalorienziel (ohne Sport) = 1800 kcal (fix)
-    // An Sporttagen: 1800 + tatsächliche Strava-Kalorien (live im Frontend addiert)
+    // Ruhetag: immer 2000 kcal. Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag).
+    // VO2max-Schutz läuft ausschließlich über den 90%-Eat-back-Tier (frontend), nicht über
+    // eine erhöhte Basis – damit ist die Formel für alle Tage einheitlich.
     // Tagesziel-Grenzen: nie unter 2000 (Schlaf/Regeneration) und nie über 3000 kcal.
     const MIN_DAILY_KCAL   = 2000;
     const MAX_DAILY_KCAL   = 3000;
@@ -124,8 +125,6 @@ export default async (req) => {
     // Tiered eat-back (Ø-Faktor ~0.75): VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%
     // avgActiveDayBurn wird hier mit 0.75 geschätzt (frontend berechnet tagesaktuell exakt)
     const kcalGoalTrainDay = clampDaily(1800 + Math.round(avgActiveDayBurn * 0.75));
-    // VO2max-Tage: kein Defizit → volles TDEE als Basis (kein Kaloriendefizit, auch nicht im Grundumsatz)
-    const kcalGoalVo2Day   = clampDaily(tdeeBase ? Math.round(tdeeBase) : kcalGoalRestDay + 400);
     const kcalGoal         = kcalGoalRestDay;
     const trainDayBonus    = avgActiveDayBurn;
     const deficitVsTdee    = tdeeBase ? tdeeBase - kcalGoalRestDay : null;
@@ -163,7 +162,7 @@ export default async (req) => {
 - BMR: ${bmr ? Math.round(bmr) : '–'} kcal | TDEE Ruhetag: ${tdeeBase ?? '–'} kcal
 
 ## FESTE ZIELE (nicht ändern)
-- Kalorien Ruhetag: 1800 kcal | Trainingstag: 1800 + tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%) | VO2max-Tag: TDEE + 90% Strava-kcal
+- Ruhetag: immer 2000 kcal | Trainingstag: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
 - Tagesziel ist begrenzt auf 2000–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
 - Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Makros Ruhetag/Gehen:   Protein 150g | Carbs 150g | Fett 66g
@@ -223,7 +222,6 @@ Antworte NUR mit diesem JSON:
       kcalGoal,           // = kcalGoalRestDay — Frontend addiert tagesaktuelle Strava-kcal
       kcalGoalRestDay,    // BMR + NEAT + TEF − Defizit
       kcalGoalTrainDay,   // Schätzung: kcalGoalRestDay + Ø Strava-Verbrauch
-      kcalGoalVo2Day,     // Volles TDEE (kein Defizit) als Basis für VO2max-Tage
       trainDayBonus,      // = avgActiveDayBurn (Frontend nutzt tatsächliche Sportkalorien)
       // Komponenten (für Transparenz-Anzeige im UI)
       bmr:      bmr ? Math.round(bmr) : null,
