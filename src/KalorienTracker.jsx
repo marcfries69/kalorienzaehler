@@ -1316,6 +1316,8 @@ const KalorienTracker = () => {
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
     // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
     const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
+    // TDEE ohne Sport (BMR+NEAT+TEF) als Basis für die Defizit-Anzeige
+    const tdeeNoSport = kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : null;
 
     const tracked = days;
     if (tracked.length === 0) return null;
@@ -1358,10 +1360,14 @@ const KalorienTracker = () => {
       const hasCorrEntry = meals.some(m => m.isAutoCorrection);
       const realKcal     = hasCorrEntry ? Math.round(meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0)) : kcalLogged;
       const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
+      const kcalDisplay  = useGoal ? dayGoal : kcalLogged;
+      const sportKcal    = training?.totalCalories || 0;
+      const net          = Math.round(kcalDisplay - sportKcal);
+      const deficit      = tdeeNoSport !== null ? Math.round(tdeeNoSport - net) : null;
       return {
         date:        d,
         kcal:        kcalLogged,
-        kcalDisplay: useGoal ? dayGoal : kcalLogged,
+        kcalDisplay,
         untracked:   hasCorrEntry || useGoal,
         protein: Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.protein || 0), 0)),
         carbs:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.carbs   || 0), 0)),
@@ -1369,11 +1375,14 @@ const KalorienTracker = () => {
         fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
         water:   waterHistory[d] || 0,
         goal:    dayGoal,
-        sport:   training?.totalCalories || 0,
+        sport:   sportKcal,
+        net,
+        deficit,
       };
     });
 
     const maxKcal = Math.max(...dayData.map(d => Math.max(d.kcalDisplay || d.kcal, d.goal)), 1);
+    const deficitDays = dayData.filter(d => d.deficit !== null);
 
     return {
       avg: {
@@ -1383,12 +1392,15 @@ const KalorienTracker = () => {
         fat: Math.round(sums.fat / n),
         fiber: Math.round(sums.fiber / n),
         sport: Math.round(sums.sport / n),
+        net: Math.round(dayData.reduce((s, d) => s + d.net, 0) / dayData.length),
+        deficit: deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0) / deficitDays.length) : null,
       },
       trackedDays: n,
       totalDays: days.length,
       avgWater: waterDays.length > 0 ? (waterSum / waterDays.length).toFixed(1) : '0.0',
       dayData,
       maxKcal,
+      tdeeNoSport,
     };
   };
 
@@ -1842,6 +1854,46 @@ ${trainingDays.filter(d => {
               </div>
             </div>
             );
+            })()}
+
+            {/* ── Netto-Kalorien & Defizit ── */}
+            {(() => {
+              const dayStrava   = trainingDays.find(d => d.date === selectedDate);
+              const sportKcal   = dayStrava?.totalCalories || 0;
+              const netKcal     = Math.round(totals.kcal - sportKcal);
+              const tdeeNoSport = kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : null;
+              const deficit     = tdeeNoSport !== null ? Math.round(tdeeNoSport - netKcal) : null;
+              const REFERENCE_DEFICIT = 200;
+              const deficitTone = deficit === null
+                ? { bg: 'bg-slate-50 border-slate-200', text: 'text-slate-600', num: 'text-slate-700' }
+                : deficit >= REFERENCE_DEFICIT
+                  ? { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-600', num: 'text-emerald-700' }
+                  : deficit > 0
+                    ? { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-600', num: 'text-amber-700' }
+                    : { bg: 'bg-rose-50 border-rose-200', text: 'text-rose-600', num: 'text-rose-700' };
+              return (
+                <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+                  <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2">
+                    <Flame className="w-4 h-4 text-rose-500" /> Netto-Kalorien & Defizit
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
+                      <p className="text-xs text-slate-500 mb-1">Netto-Kalorien</p>
+                      <p className="text-2xl font-bold text-slate-700 mono">{netKcal}</p>
+                      <p className="text-xs text-slate-400 mt-1">{Math.round(totals.kcal)} Essen − {sportKcal} Sport</p>
+                    </div>
+                    <div className={`border rounded-xl p-4 text-center ${deficitTone.bg}`}>
+                      <p className={`text-xs mb-1 ${deficitTone.text}`}>{deficit === null ? 'Defizit' : deficit >= 0 ? 'Defizit' : 'Überschuss'}</p>
+                      <p className={`text-2xl font-bold mono ${deficitTone.num}`}>
+                        {deficit === null ? '–' : `${deficit >= 0 ? '−' : '+'}${Math.abs(deficit)}`}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {tdeeNoSport !== null ? `TDEE ${tdeeNoSport} − Netto ${netKcal} · Ziel ~${REFERENCE_DEFICIT} kcal` : 'TDEE ohne Sport nicht verfügbar'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
             })()}
 
             {/* ── Mikronährstoffe ── */}
@@ -2364,6 +2416,38 @@ ${trainingDays.filter(d => {
                         <p className="text-2xl font-bold mono text-emerald-900">{stats.avg.sport}</p>
                         <p className="text-xs text-emerald-500 mt-1">kcal/Tag verbrannt</p>
                       </div>
+
+                      {/* Net calories average */}
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 border border-slate-200 rounded-xl p-4">
+                        <p className="text-slate-600 text-xs font-semibold uppercase tracking-wide mb-1">Netto-Kalorien</p>
+                        <p className="text-2xl font-bold mono text-slate-800">{stats.avg.net}</p>
+                        <p className="text-xs text-slate-400 mt-1">Ø Essen − Sport</p>
+                      </div>
+
+                      {/* Deficit average */}
+                      {(() => {
+                        const d = stats.avg.deficit;
+                        const tone = d === null
+                          ? { bg: 'from-slate-50 to-slate-100', border: 'border-slate-200', text: 'text-slate-600', num: 'text-slate-800' }
+                          : d >= 200
+                            ? { bg: 'from-emerald-50 to-teal-50', border: 'border-emerald-200', text: 'text-emerald-600', num: 'text-emerald-900' }
+                            : d > 0
+                              ? { bg: 'from-amber-50 to-orange-50', border: 'border-amber-200', text: 'text-amber-600', num: 'text-amber-900' }
+                              : { bg: 'from-rose-50 to-red-50', border: 'border-rose-200', text: 'text-rose-600', num: 'text-rose-900' };
+                        return (
+                          <div className={`bg-gradient-to-br ${tone.bg} border ${tone.border} rounded-xl p-4`}>
+                            <p className={`${tone.text} text-xs font-semibold uppercase tracking-wide mb-1`}>
+                              {d === null ? 'Defizit' : d >= 0 ? 'Defizit' : 'Überschuss'}
+                            </p>
+                            <p className={`text-2xl font-bold mono ${tone.num}`}>
+                              {d === null ? '–' : `${d >= 0 ? '−' : '+'}${Math.abs(d)}`}
+                            </p>
+                            <p className={`text-xs ${tone.text} opacity-70 mt-1`}>
+                              {d === null ? 'TDEE n/a' : `Ø/Tag · Ziel ~200 kcal`}
+                            </p>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -2490,6 +2574,95 @@ ${trainingDays.filter(d => {
                       })()}
                     </div>
                   </div>
+
+                  {/* Deficit per day (TDEE ohne Sport − Netto-Kalorien) */}
+                  {(() => {
+                    const deficits = stats.dayData.filter(d => d.deficit !== null);
+                    if (deficits.length === 0) return null;
+                    const REFERENCE_DEFICIT = 200;
+                    const maxD  = Math.max(...deficits.map(d => d.deficit), REFERENCE_DEFICIT, 0);
+                    const minD  = Math.min(...deficits.map(d => d.deficit), 0);
+                    const range = (maxD - minD) || 1;
+                    const zeroPct = ((0 - minD) / range) * 100;
+                    const refPct  = ((REFERENCE_DEFICIT - minD) / range) * 100;
+                    const avgD    = stats.avg.deficit;
+                    return (
+                      <div className="glass rounded-3xl p-6 shadow-xl mt-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                            <Flame className="w-4 h-4 text-rose-500" /> Defizit pro Tag
+                          </h3>
+                          <span className="text-xs text-slate-400">
+                            Ø {avgD !== null ? `${avgD >= 0 ? '−' : '+'}${Math.abs(avgD)}` : '–'} kcal
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mb-4">TDEE ohne Sport − Netto-Kalorien (Essen − Sport) · gestrichelt = Ziel 200 kcal</p>
+
+                        <div className="flex items-end gap-1 relative" style={{ height: '110px' }}>
+                          <div
+                            className="absolute left-0 right-0 border-t border-dashed border-emerald-400 pointer-events-none z-10"
+                            style={{ bottom: `${refPct}%` }}
+                          />
+                          <div
+                            className="absolute left-0 right-0 border-t border-slate-300 pointer-events-none"
+                            style={{ bottom: `${zeroPct}%` }}
+                          />
+                          {stats.dayData.map((day) => {
+                            if (day.deficit === null) return <div key={day.date} className="flex-1" />;
+                            const isSel = day.date === selectedDate;
+                            const barPct = (Math.abs(day.deficit) / range) * 100;
+                            const isPositive = day.deficit >= 0;
+                            return (
+                              <div
+                                key={day.date}
+                                className="flex-1 relative cursor-pointer group"
+                                style={{ height: '100%' }}
+                                onClick={() => { setSelectedDate(day.date); setActiveTab('day'); }}
+                              >
+                                <div
+                                  className={`absolute w-full rounded-sm transition-all group-hover:opacity-75 ${
+                                    isPositive ? 'bg-emerald-400' : 'bg-rose-400'
+                                  } ${isSel ? 'ring-2 ring-offset-1 ring-slate-500' : ''}`}
+                                  style={{
+                                    height: `${barPct}%`,
+                                    bottom: isPositive ? `${zeroPct}%` : `${zeroPct - barPct}%`,
+                                  }}
+                                  title={`${isPositive ? 'Defizit' : 'Überschuss'}: ${Math.abs(day.deficit)} kcal`}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex gap-1 mt-1">
+                          {stats.dayData.map(day => (
+                            <span
+                              key={day.date}
+                              className="flex-1 text-center text-slate-400 select-none"
+                              style={{ fontSize: isWeek ? '11px' : '9px' }}
+                            >
+                              {isWeek
+                                ? new Date(day.date + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short' })
+                                : new Date(day.date + 'T12:00:00').getDate()}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-4 mt-3 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-8 h-0 border-t-2 border-dashed border-emerald-400" />
+                            <span className="text-xs text-slate-400">Ziel ({REFERENCE_DEFICIT} kcal)</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-3 h-3 rounded-sm bg-emerald-400" />
+                            <span className="text-xs text-slate-400">Defizit</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-3 h-3 rounded-sm bg-rose-400" />
+                            <span className="text-xs text-slate-400">Überschuss</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* ── Macro charts 2×2 ── */}
                   <div className="grid grid-cols-2 gap-3 mt-3">
