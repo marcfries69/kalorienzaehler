@@ -81,6 +81,7 @@ const KalorienTracker = () => {
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
   const [activeTab, setActiveTab] = useState('day');
   const [monthOffset, setMonthOffset] = useState(0); // 0 = aktueller Monat, -1 = Vormonat, ...
+  const [weekOffset, setWeekOffset] = useState(0); // 0 = aktuelle 7-Tage-Periode, -1 = vorherige, ...
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -1291,10 +1292,11 @@ const KalorienTracker = () => {
   };
 
   // ── Stats helpers ────────────────────────────────────────────────────────────
-  const getLastNDays = (n) =>
-    Array.from({ length: n }, (_, i) => {
+  // Rollierendes 7-Tage-Fenster, offset 0 = bis heute, -1 = die 7 Tage davor, ...
+  const getWeekDays = (offset = 0) =>
+    Array.from({ length: 7 }, (_, i) => {
       const d = new Date();
-      d.setDate(d.getDate() - (n - 1 - i));
+      d.setDate(d.getDate() + offset * 7 - (6 - i));
       return toDateKey(d);
     });
 
@@ -1429,7 +1431,7 @@ const KalorienTracker = () => {
     );
   }
 
-  const weekDays = getLastNDays(7);
+  const weekDays = getWeekDays(weekOffset);
   const monthDays = getMonthDays(monthOffset);
   const weekStats = calcStats(weekDays);
   const monthStats = calcStats(monthDays);
@@ -2293,38 +2295,38 @@ ${trainingDays.filter(d => {
           const isWeek = activeTab === 'week';
           const days = isWeek ? weekDays : monthDays;
           const stats = isWeek ? weekStats : monthStats;
+          const offset    = isWeek ? weekOffset : monthOffset;
+          const setOffset = isWeek ? setWeekOffset : setMonthOffset;
           const monthDate = new Date(new Date().getFullYear(), new Date().getMonth() + monthOffset, 1);
           const title = isWeek
-            ? 'Letzte 7 Tage'
+            ? (weekOffset === 0
+                ? 'Letzte 7 Tage'
+                : `${new Date(weekDays[0] + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} – ${new Date(weekDays[6] + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}`)
             : monthDate.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
 
           return (
             <>
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  {!isWeek && (
-                    <button
-                      onClick={() => setMonthOffset(o => o - 1)}
-                      className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 transition-colors"
-                      title="Vorheriger Monat"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setOffset(o => o - 1)}
+                    className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 transition-colors"
+                    title={isWeek ? 'Vorherige Woche' : 'Vorheriger Monat'}
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
                   <h2 className="text-2xl font-bold text-slate-800">{title}</h2>
-                  {!isWeek && (
+                  <button
+                    onClick={() => setOffset(o => Math.min(0, o + 1))}
+                    disabled={offset >= 0}
+                    className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    title={isWeek ? 'Nächste Woche' : 'Nächster Monat'}
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                  {offset !== 0 && (
                     <button
-                      onClick={() => setMonthOffset(o => Math.min(0, o + 1))}
-                      disabled={monthOffset >= 0}
-                      className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      title="Nächster Monat"
-                    >
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  )}
-                  {!isWeek && monthOffset !== 0 && (
-                    <button
-                      onClick={() => setMonthOffset(0)}
+                      onClick={() => setOffset(0)}
                       className="ml-1 text-xs font-semibold text-teal-600 hover:text-teal-700 underline"
                     >
                       Heute
