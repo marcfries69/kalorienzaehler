@@ -1332,17 +1332,18 @@ const KalorienTracker = () => {
       const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
       const kcalEff      = useGoal ? dayGoal : kcalLogged;
       if (useGoal) {
-        return { ...acc, kcal: acc.kcal + kcalEff };
+        return { ...acc, kcal: acc.kcal + kcalEff, sport: acc.sport + (training?.totalCalories || 0) };
       }
       // Correction entries contribute only kcal (macros = 0 for untracked days)
-      return meals.reduce((a, m) => ({
+      const mealSums = meals.reduce((a, m) => ({
         kcal:    a.kcal    + (m.kcal    || 0),
         protein: a.protein + (!m.isAutoCorrection ? (m.protein || 0) : 0),
         carbs:   a.carbs   + (!m.isAutoCorrection ? (m.carbs   || 0) : 0),
         fat:     a.fat     + (!m.isAutoCorrection ? (m.fat     || 0) : 0),
         fiber:   a.fiber   + (!m.isAutoCorrection ? (m.fiber   || 0) : 0),
       }), acc);
-    }, { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+      return { ...mealSums, sport: acc.sport + (training?.totalCalories || 0) };
+    }, { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sport: 0 });
 
     const n = tracked.length;
     const waterDays = days.filter(d => (waterHistory[d] || 0) > 0);
@@ -1368,6 +1369,7 @@ const KalorienTracker = () => {
         fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
         water:   waterHistory[d] || 0,
         goal:    dayGoal,
+        sport:   training?.totalCalories || 0,
       };
     });
 
@@ -1380,6 +1382,7 @@ const KalorienTracker = () => {
         carbs: Math.round(sums.carbs / n),
         fat: Math.round(sums.fat / n),
         fiber: Math.round(sums.fiber / n),
+        sport: Math.round(sums.sport / n),
       },
       trackedDays: n,
       totalDays: days.length,
@@ -1747,16 +1750,20 @@ ${trainingDays.filter(d => {
               </div>
 
               {/* Auto-adjustment info strip */}
-              {isToday && todayTrainingBonus > 0 && (
-                <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700">
-                  <Activity className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="leading-tight">
-                    Trainingstag erkannt · Ziel automatisch um +{todayTrainingBonus} kcal erhöht
-                    {trainingDays.find(d => d.date === todayKey)?.totalCalories > 0 &&
-                      ` (${trainingDays.find(d => d.date === todayKey).totalCalories} kcal verbrannt)`}
-                  </span>
-                </div>
-              )}
+              {(() => {
+                const dayBonus = isToday ? todayTrainingBonus : tieredEatback(dayStrava);
+                const dayBurn  = dayStrava?.totalCalories || 0;
+                if (dayBonus <= 0) return null;
+                return (
+                  <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700">
+                    <Activity className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="leading-tight">
+                      Trainingstag erkannt · Ziel automatisch um +{dayBonus} kcal erhöht
+                      {dayBurn > 0 && ` (${dayBurn} kcal verbrannt)`}
+                    </span>
+                  </div>
+                );
+              })()}
 
               {/* Progress bar */}
               <div className="mb-5">
@@ -2348,6 +2355,15 @@ ${trainingDays.filter(d => {
                         <p className="text-2xl font-bold mono text-cyan-900">{stats.avgWater} L</p>
                         <p className="text-xs text-cyan-400 mt-1">Ziel: 2–3L</p>
                       </div>
+
+                      {/* Sport calories average */}
+                      <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4">
+                        <p className="text-emerald-600 text-xs font-semibold uppercase tracking-wide mb-1 flex items-center gap-1">
+                          <Activity className="w-3 h-3" /> Sport
+                        </p>
+                        <p className="text-2xl font-bold mono text-emerald-900">{stats.avg.sport}</p>
+                        <p className="text-xs text-emerald-500 mt-1">kcal/Tag verbrannt</p>
+                      </div>
                     </div>
                   </div>
 
@@ -2387,7 +2403,9 @@ ${trainingDays.filter(d => {
                                         : 'bg-gradient-to-t from-emerald-500 to-teal-400'
                                   } ${isSel ? 'ring-2 ring-offset-1 ring-slate-500' : ''}`}
                                   style={{ height: `${pct}%` }}
-                                  title={day.untracked ? `Nicht erfasst · geschätzt ${displayKcal} kcal (+10%)` : `${day.kcal} kcal (Ziel: ${day.goal} kcal)`}
+                                  title={day.untracked
+                                    ? `Nicht erfasst · geschätzt ${displayKcal} kcal (+10%)${day.sport > 0 ? ` · Sport: ${day.sport} kcal` : ''}`
+                                    : `${day.kcal} kcal (Ziel: ${day.goal} kcal)${day.sport > 0 ? ` · Sport: ${day.sport} kcal` : ''}`}
                                 />
                               ) : (
                                 <div className="w-full h-1 bg-slate-200 rounded-full" />
@@ -2421,6 +2439,55 @@ ${trainingDays.filter(d => {
                         <div className="w-3 h-3 rounded-sm bg-red-400" />
                         <span className="text-xs text-slate-400">Über Ziel</span>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Sport calories per day */}
+                  <div className="glass rounded-3xl p-6 shadow-xl mt-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-emerald-600" /> Sport-Kalorien pro Tag
+                      </h3>
+                      <span className="text-xs text-slate-400">Ø {stats.avg.sport} kcal/Tag</span>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-4">verbrannte Kalorien laut Strava (inkl. −20% Korrektur)</p>
+
+                    <div className="flex items-end gap-1" style={{ height: '90px' }}>
+                      {(() => {
+                        const maxSport = Math.max(...stats.dayData.map(d => d.sport || 0), 1);
+                        return stats.dayData.map((day) => {
+                          const pct = day.sport > 0 ? (day.sport / maxSport) * 100 : 0;
+                          const isSel = day.date === selectedDate;
+                          return (
+                            <div
+                              key={day.date}
+                              className="flex-1 flex flex-col items-center gap-1 cursor-pointer group"
+                              onClick={() => { setSelectedDate(day.date); setActiveTab('day'); }}
+                            >
+                              <div className="w-full relative flex flex-col justify-end" style={{ height: '70px' }}>
+                                {day.sport > 0 ? (
+                                  <div
+                                    className={`w-full rounded-t-md transition-all group-hover:opacity-75 bg-gradient-to-t from-emerald-500 to-teal-400 ${isSel ? 'ring-2 ring-offset-1 ring-slate-500' : ''}`}
+                                    style={{ height: `${pct}%` }}
+                                    title={`${day.sport} kcal verbrannt`}
+                                  />
+                                ) : (
+                                  <div className="w-full h-1 bg-slate-200 rounded-full" />
+                                )}
+                              </div>
+                              <span
+                                className="text-slate-500 text-center leading-tight select-none"
+                                style={{ fontSize: isWeek ? '11px' : '9px' }}
+                              >
+                                {isWeek
+                                  ? new Date(day.date + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short' })
+                                  : new Date(day.date + 'T12:00:00').getDate()
+                                }
+                              </span>
+                            </div>
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
 
