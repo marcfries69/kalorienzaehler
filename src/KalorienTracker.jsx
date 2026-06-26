@@ -45,6 +45,10 @@ const MIN_DAILY_KCAL = 1900;
 const MAX_DAILY_KCAL = 3000;
 const capDailyGoal = (kcal) => Math.min(Math.max(Math.round(kcal || 0), MIN_DAILY_KCAL), MAX_DAILY_KCAL);
 
+// Erhaltungskalorien (Defizit-Berechnung) = fixe Basis 2100 kcal + adjustierte Strava-Kalorien.
+// Alles an Nahrungsaufnahme darunter gilt als Defizit.
+const MAINTENANCE_BASE_KCAL = 2100;
+
 // ── Mikronährstoff-Tagesziele (DGE-Referenzwerte) ────────────────────────────
 const MICRO_TARGETS = [
   { key: 'calcium',    label: 'Kalzium',     unit: 'mg',  goal: 1000, color: 'sky',     emoji: '🦴' },
@@ -1209,8 +1213,8 @@ const KalorienTracker = () => {
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
     // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
     const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
-    // TDEE ohne Sport (BMR+NEAT+TEF) als Basis für die Defizit-Anzeige
-    const tdeeNoSport = kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : null;
+    // Erhaltungskalorien-Basis (ohne Sport) für die Defizit-Anzeige – fix 2100 kcal
+    const tdeeNoSport = MAINTENANCE_BASE_KCAL;
 
     const tracked = days;
     if (tracked.length === 0) return null;
@@ -1256,7 +1260,8 @@ const KalorienTracker = () => {
       const kcalDisplay  = useGoal ? dayGoal : kcalLogged;
       const sportKcal    = training?.totalCalories || 0;
       const net          = Math.round(kcalDisplay - sportKcal);
-      const deficit      = tdeeNoSport !== null ? Math.round(tdeeNoSport - net) : null;
+      // Erhaltungskalorien = 2100 (tdeeNoSport) + sportKcal = tdeeNoSport - net (äquivalent umgestellt)
+      const deficit      = Math.round(tdeeNoSport - net);
       return {
         date:        d,
         kcal:        kcalLogged,
@@ -1742,8 +1747,8 @@ ${trainingDays.filter(d => {
               const dayStrava   = trainingDays.find(d => d.date === selectedDate);
               const sportKcal   = dayStrava?.totalCalories || 0;
               const netKcal     = Math.round(totals.kcal - sportKcal);
-              const tdeeNoSport = kiResult?.tdeeRestDay ? Math.round(kiResult.tdeeRestDay) : null;
-              const deficit     = tdeeNoSport !== null ? Math.round(tdeeNoSport - netKcal) : null;
+              const erhaltung   = MAINTENANCE_BASE_KCAL + sportKcal;
+              const deficit     = Math.round(erhaltung - Math.round(totals.kcal));
               const REFERENCE_DEFICIT = 200;
               const deficitTone = deficit === null
                 ? { bg: 'bg-slate-50 border-slate-200', text: 'text-slate-600', num: 'text-slate-700' }
@@ -1769,7 +1774,7 @@ ${trainingDays.filter(d => {
                         {deficit === null ? '–' : `${deficit >= 0 ? '−' : '+'}${Math.abs(deficit)}`}
                       </p>
                       <p className="text-xs text-slate-400 mt-1">
-                        {tdeeNoSport !== null ? `TDEE ${tdeeNoSport} − Netto ${netKcal} · Ziel ~${REFERENCE_DEFICIT} kcal` : 'TDEE ohne Sport nicht verfügbar'}
+                        Erhaltung {erhaltung} ({MAINTENANCE_BASE_KCAL} + {sportKcal} Sport) − Essen {Math.round(totals.kcal)} · Ziel ~{REFERENCE_DEFICIT} kcal
                       </p>
                     </div>
                   </div>
