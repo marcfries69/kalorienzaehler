@@ -30,7 +30,7 @@ async function refreshAccessToken() {
 }
 
 // Strava-Kalorien sind im Schnitt zu hoch angesetzt – pauschale Korrektur.
-const STRAVA_DEFLATION = 0.8;
+const STRAVA_DEFLATION = 0.75;
 
 const isRideType = (t) => {
   const s = (t || '').toLowerCase();
