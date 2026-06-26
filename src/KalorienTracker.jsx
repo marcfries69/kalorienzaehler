@@ -1790,6 +1790,29 @@ ${trainingDays.filter(d => {
                 );
               })()}
 
+              {/* Tagesdefizit-Badge (Erhaltung 2100 + Sport − Essen) */}
+              {(() => {
+                const dayBurn = dayStrava?.totalCalories || 0;
+                const erhaltung = MAINTENANCE_BASE_KCAL + dayBurn;
+                const deficit = Math.round(erhaltung - Math.round(totals.kcal));
+                const tone = deficit >= 200
+                  ? { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700' }
+                  : deficit > 0
+                    ? { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700' }
+                    : { bg: 'bg-rose-50 border-rose-200', text: 'text-rose-700' };
+                return (
+                  <div className={`flex items-center gap-2 mb-3 px-3 py-2 rounded-xl text-xs ${tone.bg} ${tone.text}`}>
+                    <Flame className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="leading-tight font-semibold">
+                      {deficit >= 0 ? 'Defizit' : 'Überschuss'} {deficit >= 0 ? '−' : '+'}{Math.abs(deficit)} kcal
+                    </span>
+                    <span className="text-slate-400 font-normal">
+                      (Erhaltung {erhaltung} − Essen {Math.round(totals.kcal)})
+                    </span>
+                  </div>
+                );
+              })()}
+
               {/* Progress bar */}
               <div className="mb-5">
                 <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
