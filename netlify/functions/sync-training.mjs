@@ -106,7 +106,9 @@ export default async (req) => {
     if (req.method === 'POST') {
       try { rules = await req.json(); } catch { rules = {}; }
     }
-    const stravaDeflation    = (rules.stravaDeflation ?? 25) / 100;
+    // rules.stravaDeflation ist der ABZUG in % (z.B. 25 = "-25%") – der Multiplikator
+    // ist daher der verbleibende Anteil (100-25)/100 = 0.75, nicht 25/100!
+    const stravaDeflation    = (100 - (rules.stravaDeflation ?? 25)) / 100;
     const useKjForPowerRides = rules.useKjForPowerRides ?? true;
 
     // ── 1. Get fresh Strava access token ──────────────────────────────────────
