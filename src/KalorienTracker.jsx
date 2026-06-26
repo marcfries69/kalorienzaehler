@@ -177,14 +177,42 @@ const KalorienTracker = () => {
   const [rules, setRules] = useState(loadRules);
   const [showRulesSettings, setShowRulesSettings] = useState(false);
   const [rulesDraft, setRulesDraft] = useState(null);
+  const [validatingRules, setValidatingRules] = useState(false);
+  const [rulesErrors, setRulesErrors] = useState([]);
 
   const saveRules = (next) => {
     setRules(next);
     localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(next));
     setShowRulesSettings(false);
+    setRulesErrors([]);
     // KI-Cache invalidieren, da Basis/Makro-Regeln sich geändert haben könnten
     localStorage.removeItem('ki-result');
     setKiResult(null);
+  };
+
+  // Speicherung wird erst wirksam, wenn die KI keine Inkonsistenzen mehr findet
+  // (Mathe-/Logik-Checks + qualitative Plausibilitätsprüfung via Claude).
+  const validateAndSaveRules = async (draft) => {
+    setValidatingRules(true);
+    setRulesErrors([]);
+    try {
+      const res = await fetch('/.netlify/functions/validate-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules: draft }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Validierung fehlgeschlagen');
+      if (data.valid) {
+        saveRules(draft);
+      } else {
+        setRulesErrors(data.errors?.length ? data.errors : ['Unbekannte Inkonsistenz gefunden.']);
+      }
+    } catch (err) {
+      setRulesErrors([`Validierung fehlgeschlagen: ${err.message}`]);
+    } finally {
+      setValidatingRules(false);
+    }
   };
 
   // Sportkalorien werden zu 100% gutgeschrieben (volle Strava-Korrektur, siehe sync-training.mjs).
@@ -1675,7 +1703,7 @@ ${trainingDays.filter(d => {
               Makroziele
             </button>
             <button
-              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setShowRulesSettings(true); }}
+              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setRulesErrors([]); setShowRulesSettings(true); }}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
             >
               <Settings className="w-4 h-4" />
@@ -4154,7 +4182,7 @@ ${trainingDays.filter(d => {
                 <Settings className="w-6 h-6" />
                 <h2 className="text-lg font-bold">Regel-Einstellungen</h2>
               </div>
-              <button onClick={() => setShowRulesSettings(false)} className="p-2 hover:bg-white/20 rounded-lg transition">
+              <button onClick={() => { setShowRulesSettings(false); setRulesErrors([]); }} className="p-2 hover:bg-white/20 rounded-lg transition">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -4284,18 +4312,37 @@ ${trainingDays.filter(d => {
                 </div>
               </div>
 
+              {rulesErrors.length > 0 && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+                  <p className="text-sm font-bold text-rose-700 mb-2 flex items-center gap-1.5">
+                    <X className="w-4 h-4" /> Inkonsistenzen gefunden – bitte beheben
+                  </p>
+                  <ul className="space-y-1.5">
+                    {rulesErrors.map((e, i) => (
+                      <li key={i} className="text-xs text-rose-600 leading-relaxed">• {e}</li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-rose-400 mt-2">Die Speicherung wird erst wirksam, wenn alle Punkte behoben sind.</p>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <button
-                  onClick={() => setRulesDraft({ ...DEFAULT_RULES })}
-                  className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition text-sm"
+                  onClick={() => { setRulesDraft({ ...DEFAULT_RULES }); setRulesErrors([]); }}
+                  disabled={validatingRules}
+                  className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition text-sm disabled:opacity-50"
                 >
                   Zurücksetzen
                 </button>
                 <button
-                  onClick={() => saveRules(rulesDraft)}
-                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 text-white font-bold shadow-lg transition text-sm"
+                  onClick={() => validateAndSaveRules(rulesDraft)}
+                  disabled={validatingRules}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 text-white font-bold shadow-lg transition text-sm disabled:opacity-60 flex items-center justify-center gap-2"
                 >
-                  Speichern
+                  {validatingRules
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Prüfe auf Inkonsistenzen…</>
+                    : 'Prüfen & Speichern'
+                  }
                 </button>
               </div>
             </div>

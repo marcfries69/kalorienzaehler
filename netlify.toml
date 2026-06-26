@@ -21,6 +21,9 @@
 [functions."sync-ride"]
   timeout = 20
 
+[functions."validate-rules"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
