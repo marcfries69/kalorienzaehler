@@ -38,14 +38,8 @@ export default async (req) => {
       errors.push(`Erhaltungskalorien (${rules.maintenanceBase}) müssen über der Untergrenze (${rules.kcalMinDaily}) liegen, sonst entsteht am Ruhetag kein Defizit.`);
     }
 
-    ['stravaDeflation', 'walkHikeFactor', 'shortZone2Factor'].forEach((key) => {
-      if (!num(rules[key]) || rules[key] < 0 || rules[key] > 100) {
-        errors.push(`"${key}" muss zwischen 0 und 100 (%) liegen.`);
-      }
-    });
-
-    if (!num(rules.shortZone2ThresholdMin) || rules.shortZone2ThresholdMin <= 0 || rules.shortZone2ThresholdMin > 300) {
-      errors.push('Schwelle "kurze Einheit" muss zwischen 1 und 300 Minuten liegen.');
+    if (!num(rules.stravaDeflation) || rules.stravaDeflation < 0 || rules.stravaDeflation > 100) {
+      errors.push('"stravaDeflation" muss zwischen 0 und 100 (%) liegen.');
     }
 
     const macroLabels = { macroRest: 'Ruhetag/Gehen', macroTrain: 'Laufen/Kraft', macroCycle: 'Zone2/VO2max' };
@@ -78,19 +72,6 @@ export default async (req) => {
       errors.push(`Das resultierende Defizit (${deficitTrain} kcal/Tag) liegt über 600 kcal – RED-S-Risiko. Basis oder Erhaltungskalorien anpassen.`);
     }
 
-    // Effektive Gesamt-Anrechnung je Aktivitätstyp = Pauschalkorrektur × Aktivitätsfaktor
-    // (verschachtelte Prozentsätze hier EINMAL korrekt verrechnet, damit weder die
-    // KI-Prüfung noch das Frontend das selbst nachrechnen und sich dabei vertun müssen)
-    let effectiveFactors = null;
-    if (num(rules.stravaDeflation) && num(rules.walkHikeFactor) && num(rules.shortZone2Factor)) {
-      const deflationKeep = (100 - rules.stravaDeflation) / 100; // z.B. -25% Abzug → 0.75 bleiben
-      effectiveFactors = {
-        normal:     +(deflationKeep * 1.0).toFixed(4),
-        shortZone2: +(deflationKeep * (rules.shortZone2Factor / 100)).toFixed(4),
-        walkHike:   +(deflationKeep * (rules.walkHikeFactor   / 100)).toFixed(4),
-      };
-    }
-
     // Bei harten Fehlern: KI-Check überspringen, sofort zurückmelden
     if (errors.length > 0) {
       return Response.json({ valid: false, errors, warnings: [] });
@@ -98,11 +79,9 @@ export default async (req) => {
 
     // ── 2. KI-Plausibilitätsprüfung (rein beratend, blockiert nicht) ──────────
     const apiKey = Netlify.env.get('ANTHROPIC_API_KEY');
-    if (!apiKey || !effectiveFactors) {
+    if (!apiKey) {
       return Response.json({ valid: true, errors: [], warnings: [] });
     }
-
-    const pct = (f) => `${Math.round(f * 100)}%`;
 
     const prompt = `Du bist ein Sporternährungs-Experte. Gib NUR beratende Hinweise zu möglichen Risiken oder Unausgewogenheiten in diesen bereits gültigen Ernährungs-/Trainingsregeln eines Radsportlers. Du bewertest nicht die Mathematik (die ist bereits geprüft) – nur Plausibilität aus sportmedizinischer Sicht (z.B. RED-S-Risiko, Makro-Balance).
 
@@ -110,8 +89,7 @@ export default async (req) => {
 - Tagesziel: ${rules.kcalRestBase} kcal (Sporttag-Basis) | ${rules.kcalMinDaily} kcal (Ruhetag-Untergrenze)
 - Erhaltungskalorien ohne Sport: ${rules.maintenanceBase} kcal
 - Resultierendes Defizit: ${deficitTrain} kcal/Tag (Trainingstag), ${deficitRest} kcal/Tag (Ruhetag) – Ziel-Referenz war ${rules.referenceDeficit} kcal
-- Effektive Anrechnung der Sport-Kalorien vom Strava-Rohwert (bereits inkl. aller Korrekturfaktoren):
-  normale Einheiten ${pct(effectiveFactors.normal)}, kurze Zone-2 (<${rules.shortZone2ThresholdMin}min) ${pct(effectiveFactors.shortZone2)}, Walk/Hike ${pct(effectiveFactors.walkHike)}
+- Strava-Kalorien-Korrektur: -${rules.stravaDeflation}% (einzige Regel, oder kJ-Wert falls vorhanden und niedriger)
 - Makros Ruhetag/Gehen: P${rules.macroRest.protein}g C${rules.macroRest.carbs}g F${rules.macroRest.fat}g | Ballaststoffe ${rules.fiberGoal}g
 - Makros Laufen/Kraft: P${rules.macroTrain.protein}g C${rules.macroTrain.carbs}g F${rules.macroTrain.fat}g
 - Makros Zone2≥90min/VO2max: P${rules.macroCycle.protein}g C${rules.macroCycle.carbs}g F${rules.macroCycle.fat}g

@@ -34,9 +34,6 @@ const DEFAULT_RULES = {
   maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
   referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
   stravaDeflation:  25,  // % Abzug auf alle Strava-Kalorien (Überschätzungskorrektur)
-  walkHikeFactor:   50,  // % Anrechnung für Walk/Hike-Aktivitäten
-  shortZone2Factor: 75,  // % Anrechnung für kurze Zone-2-Einheiten
-  shortZone2ThresholdMin: 90, // Schwelle in Minuten für "kurze" Einheit
   useKjForPowerRides: true,   // kJ-Vergleich (Min von Strava-Korrektur und kJ) bei Power-Rides
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
@@ -4228,23 +4225,17 @@ ${trainingDays.filter(d => {
               {/* Strava-Korrektur */}
               <div>
                 <h3 className="text-sm font-bold text-slate-700 mb-3">Strava-Korrektur</h3>
+                <p className="text-xs text-slate-400 mb-3">Einzige Regel: pauschaler Abzug, oder kJ-Wert falls vorhanden und niedriger.</p>
                 <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { key: 'stravaDeflation',        label: 'Pauschal-Abzug',      unit: '%' },
-                    { key: 'walkHikeFactor',          label: 'Walk/Hike-Faktor',    unit: '%' },
-                    { key: 'shortZone2Factor',        label: 'Kurze Zone-2-Faktor', unit: '%' },
-                    { key: 'shortZone2ThresholdMin',  label: 'Schwelle "kurz"',     unit: 'min' },
-                  ].map(f => (
-                    <div key={f.key}>
-                      <label className="block text-xs font-medium text-slate-500 mb-1">{f.label} <span className="text-slate-300">{f.unit}</span></label>
-                      <input
-                        type="number"
-                        value={rulesDraft[f.key]}
-                        onChange={(e) => setRulesDraft({ ...rulesDraft, [f.key]: parseInt(e.target.value) || 0 })}
-                        className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
-                      />
-                    </div>
-                  ))}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Pauschal-Abzug <span className="text-slate-300">%</span></label>
+                    <input
+                      type="number"
+                      value={rulesDraft.stravaDeflation}
+                      onChange={(e) => setRulesDraft({ ...rulesDraft, stravaDeflation: parseInt(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                    />
+                  </div>
                 </div>
                 <label className="flex items-center gap-2 mt-3 text-sm text-slate-600">
                   <input
