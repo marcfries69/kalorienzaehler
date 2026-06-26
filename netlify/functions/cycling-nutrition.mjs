@@ -9,8 +9,13 @@ export default async (req) => {
   const apiKey = Netlify.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) return Response.json({ error: 'ANTHROPIC_API_KEY fehlt' }, { status: 500 });
 
-  const { blocks = [], weightKg = 75, ftpWatts, actual } = await req.json();
+  const { blocks = [], weightKg = 75, ftpWatts, actual, rules = {} } = await req.json();
   if (!blocks.length) return Response.json({ error: 'Keine Trainingsblöcke angegeben' }, { status: 400 });
+
+  const carbHour1     = rules.carbHour1     ?? 40;
+  const carbHour2     = rules.carbHour2     ?? 60;
+  const carbHour3plus = rules.carbHour3plus ?? 80;
+  const carbIntense   = rules.carbIntense   ?? 80;
 
   // actual = { kcal, avgHR, maxHR, avgWatts, distanceKm, name, zoneSource }
   // Wenn gesetzt: Einheit ist absolviert → Fokus auf Recovery anhand echter Daten.
@@ -45,10 +50,10 @@ export default async (req) => {
     let hourNum   = 1;
     while (remaining > 0) {
       const thisHourMins = Math.min(60, remaining);
-      const ratePerHour  = isVeryIntense ? 80
-                         : hourNum === 1  ? 40
-                         : hourNum === 2  ? 60
-                         :                  80;
+      const ratePerHour  = isVeryIntense ? carbIntense
+                         : hourNum === 1  ? carbHour1
+                         : hourNum === 2  ? carbHour2
+                         :                  carbHour3plus;
       const carbs = Math.round(ratePerHour * (thisHourMins / 60));
       carbSchedule.push({ hour: hourNum, durationMin: thisHourMins, carbsG: carbs, ratePerHour });
       totalDuringCarbsG += carbs;
@@ -105,8 +110,8 @@ ${duringNeeded ? carbScheduleLines : '  Keine Kohlenhydrate nötig (≤60 min, g
 
 Regel für diesen Athleten:
 ${isVeryIntense
-  ? '→ Sehr intensive Einheit: 80 g/h Carbs von Beginn an (schnelle Carbs, z.B. Gels)'
-  : '→ 1. Stunde: 40 g/h | 2. Stunde: 60 g/h | ab 3. Stunde: 80 g/h'}
+  ? `→ Sehr intensive Einheit: ${carbIntense} g/h Carbs von Beginn an (schnelle Carbs, z.B. Gels)`
+  : `→ 1. Stunde: ${carbHour1} g/h | 2. Stunde: ${carbHour2} g/h | ab 3. Stunde: ${carbHour3plus} g/h`}
 
 ## VORGABEN
 - Angaben in Gramm (Kohlenhydrate, Protein, Fett) und ml (Flüssigkeit)

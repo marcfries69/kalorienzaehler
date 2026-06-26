@@ -24,20 +24,43 @@ const toDateKey = (d) => {
   return `${year}-${month}-${day}`;
 };
 
-// Sportkalorien werden zu 100% gutgeschrieben (volle Strava-Korrektur, siehe sync-training.mjs
-// −25%-Überschätzungskorrektur). Kein zusätzlicher Eat-back-Tier mehr – die Korrektur soll nur
-// der Überschätzung entgegenwirken, nicht dem Defizit dienen. Das Defizit ergibt sich allein aus
-// der Differenz Basis (1800) vs. Erhaltungs-Basis (2100), siehe MAINTENANCE_BASE_KCAL unten.
-const sportKcalCredit = (training) => Math.round(training?.totalCalories || 0);
+// ── Konfigurierbare Regeln (Einstellungen) ────────────────────────────────────
+// Alle Zahlen, die bisher über die Konversation hartkodiert wurden, leben jetzt hier als
+// editierbare Defaults. Siehe Einstellungs-Modal (showRulesSettings) für die UI dazu.
+const RULES_STORAGE_KEY = 'app-rules';
+const DEFAULT_RULES = {
+  kcalRestBase:    1800, // Basis Ruhetag/Sporttag (vor Floor/Sport-Zuschlag)
+  kcalMinDaily:    1900, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
+  maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
+  referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
+  stravaDeflation:  25,  // % Abzug auf alle Strava-Kalorien (Überschätzungskorrektur)
+  walkHikeFactor:   50,  // % Anrechnung für Walk/Hike-Aktivitäten
+  shortZone2Factor: 75,  // % Anrechnung für kurze Zone-2-Einheiten
+  shortZone2ThresholdMin: 90, // Schwelle in Minuten für "kurze" Einheit
+  useKjForPowerRides: true,   // kJ-Vergleich (Min von Strava-Korrektur und kJ) bei Power-Rides
+  macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
+  macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
+  macroCycle: { protein: 150, carbs: 300, fat: 85 }, // Zone2 ≥90min / VO2max-Rad
+  fiberGoal: 35,
+  carbHour1:     40, // g/h, 1. Stunde (moderat)
+  carbHour2:     60, // g/h, 2. Stunde (moderat)
+  carbHour3plus: 80, // g/h, ab 3. Stunde (moderat)
+  carbIntense:   80, // g/h, sehr intensiv (Z4/Z5/Z6) von Beginn an
+};
 
-// Tagesziel-Untergrenze: nie unter 1900 kcal (Schlaf/Regeneration). Keine Obergrenze mehr –
-// an sehr langen Einheiten darf das Ziel entsprechend hoch sein, damit das Defizit konstant bleibt.
-const MIN_DAILY_KCAL = 1900;
-const capDailyGoal = (kcal) => Math.max(Math.round(kcal || 0), MIN_DAILY_KCAL);
-
-// Erhaltungskalorien (Defizit-Berechnung) = fixe Basis 2100 kcal + adjustierte Strava-Kalorien.
-// Alles an Nahrungsaufnahme darunter gilt als Defizit.
-const MAINTENANCE_BASE_KCAL = 2100;
+const loadRules = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RULES_STORAGE_KEY) || 'null');
+    if (!saved) return { ...DEFAULT_RULES };
+    return {
+      ...DEFAULT_RULES,
+      ...saved,
+      macroRest:  { ...DEFAULT_RULES.macroRest,  ...(saved.macroRest  || {}) },
+      macroTrain: { ...DEFAULT_RULES.macroTrain, ...(saved.macroTrain || {}) },
+      macroCycle: { ...DEFAULT_RULES.macroCycle, ...(saved.macroCycle || {}) },
+    };
+  } catch { return { ...DEFAULT_RULES }; }
+};
 
 // ── Mikronährstoff-Tagesziele (DGE-Referenzwerte) ────────────────────────────
 const MICRO_TARGETS = [
@@ -150,6 +173,30 @@ const KalorienTracker = () => {
   const [showMealsModal, setShowMealsModal] = useState(false);
   const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
 
+  // ── Regel-Einstellungen ───────────────────────────────────────────────────────
+  const [rules, setRules] = useState(loadRules);
+  const [showRulesSettings, setShowRulesSettings] = useState(false);
+  const [rulesDraft, setRulesDraft] = useState(null);
+
+  const saveRules = (next) => {
+    setRules(next);
+    localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(next));
+    setShowRulesSettings(false);
+    // KI-Cache invalidieren, da Basis/Makro-Regeln sich geändert haben könnten
+    localStorage.removeItem('ki-result');
+    setKiResult(null);
+  };
+
+  // Sportkalorien werden zu 100% gutgeschrieben (volle Strava-Korrektur, siehe sync-training.mjs).
+  // Kein Eat-back-Tier mehr – die Korrektur soll nur der Überschätzung entgegenwirken, nicht dem
+  // Defizit dienen. Das Defizit ergibt sich allein aus Basis (kcalRestBase) vs. Erhaltungs-Basis
+  // (maintenanceBase), siehe rules.
+  const sportKcalCredit = (training) => Math.round(training?.totalCalories || 0);
+
+  // Tagesziel-Untergrenze aus den Regeln. Keine Obergrenze – an sehr langen Einheiten darf das
+  // Ziel entsprechend hoch sein, damit das Defizit konstant bleibt.
+  const capDailyGoal = (kcal) => Math.max(Math.round(kcal || 0), rules.kcalMinDaily);
+
   // ── Auto-computed effective daily goal ───────────────────────────────────────
   // Formel: Ruhetag immer 1900 kcal. Sporttag: Basis 1800 kcal + volle (Stufe-1-korrigierte)
   // Strava-Kalorien. Kein Eat-back-Tier mehr – Defizit bleibt dadurch konstant ~300 kcal.
@@ -157,10 +204,10 @@ const KalorienTracker = () => {
     const todayTraining = trainingDays.find(d => d.date === todayKey);
     const restBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
       || (calorieGoal > 0 ? calorieGoal : null)
-      || 1800;
+      || rules.kcalRestBase;
     // Alle Strava-Aktivitäten heute summieren (reagiert auf neue Syncs)
     return capDailyGoal(restBase + sportKcalCredit(todayTraining));
-  }, [trainingDays, todayKey, kiResult, calorieGoal]);
+  }, [trainingDays, todayKey, kiResult, calorieGoal, rules]);
 
   // Sportkalorien-Bonus heute (für Anzeige) – volle Strava-Korrektur, kein Eat-back-Abschlag
   const todayTrainingBonus = useMemo(() => {
@@ -188,7 +235,7 @@ const KalorienTracker = () => {
     trainingDays.forEach(t => { stravaMap[t.date] = t; });
 
     // Tabellenzeilen aufbauen (landscape: A4 quer für mehr Spalten)
-    const kcalBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || 1800;
+    const kcalBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || rules.kcalRestBase;
     const rowGoals = []; // per-day goal for color coding
     const rows = days14.map(dateKey => {
       const meals   = history[dateKey] || [];
@@ -565,7 +612,11 @@ const KalorienTracker = () => {
   const syncTrainingData = async (silent = false) => {
     setTrainingSyncError(null);
     try {
-      const res  = await fetch('/.netlify/functions/sync-training');
+      const res  = await fetch('/.netlify/functions/sync-training', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rules),
+      });
       let json;
       try { json = await res.json(); }
       catch { throw new Error(`Sync-Training: Server gab kein JSON zurück (Status ${res.status})`); }
@@ -630,6 +681,7 @@ const KalorienTracker = () => {
             height:        freshCalcData.height ? +freshCalcData.height : null,
             activityFactor: freshCalcData.activity ? +freshCalcData.activity : 1.375,
           },
+          rules,
         }),
       });
       const json = await res.json();
@@ -693,14 +745,14 @@ const KalorienTracker = () => {
     if (today && today.totalCalories > 0) {
       // Sporttag: Basis 1800 kcal + volle (Stufe-1-korrigierte) Strava-Kalorien.
       // Kein zusätzlicher Eat-back-Abschlag mehr – das Defizit bleibt dadurch konstant ~300 kcal.
-      const restBase  = kiResult?.kcalGoalRestDay || 1800;
+      const restBase  = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
       const rawBurn   = today.totalCalories;
       trainingBonus = sportKcalCredit(today);
       adjustedGoal  = capDailyGoal(restBase + trainingBonus);
       reasonParts.push(`Trainingstag: ${adjustedGoal} kcal (${restBase} Basis + ${trainingBonus} Strava, ${today.totalMinutes} Min)`);
     } else {
-      // Rest day – nie unter 1900 kcal (Schlaf/Regeneration)
-      adjustedGoal = capDailyGoal(kiResult?.kcalGoalRestDay || 1800);
+      // Rest day – nie unter rules.kcalMinDaily (Schlaf/Regeneration)
+      adjustedGoal = capDailyGoal(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
       reasonParts.push(`Ruhetag: ${adjustedGoal} kcal`);
     }
 
@@ -848,11 +900,10 @@ const KalorienTracker = () => {
   const todayIsTrainingDay = todayHasStrength || todayHasRun || todayLongRide || todayVo2maxRide;
 
   const macroGoalGrams = (() => {
-    let protein = 150, carbs, fat;
-    if (todayLongRide || todayVo2maxRide)     { carbs = 300; fat = 85; } // Zone 2 ≥90 min oder VO2max
-    else if (todayHasRun || todayHasStrength) { carbs = 200; fat = 85; }
-    else                                       { carbs = 150; fat = 66; } // Ruhetag/Gehen → passt auf 1800 kcal
-    return { protein, carbs, fat, fiber: 35 };
+    const tier = (todayLongRide || todayVo2maxRide) ? rules.macroCycle
+      : (todayHasRun || todayHasStrength) ? rules.macroTrain
+      : rules.macroRest;
+    return { protein: tier.protein, carbs: tier.carbs, fat: tier.fat, fiber: rules.fiberGoal };
   })();
 
   // ── Derived state ────────────────────────────────────────────────────────────
@@ -909,7 +960,7 @@ const KalorienTracker = () => {
   // Läuft auch ohne kiResult (Fallback auf calorieGoal/1800), wird erneut ausgeführt
   // wenn kiResult verfügbar wird (z.B. nach ki-adjust API-Aufruf).
   useEffect(() => {
-    const restBase  = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
+    const restBase  = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase;
 
     let freshHistory;
     try { freshHistory = JSON.parse(localStorage.getItem('history-data') || '{}'); } catch { return; }
@@ -962,7 +1013,7 @@ const KalorienTracker = () => {
       localStorage.setItem('history-data', JSON.stringify(freshHistory));
       setHistory(freshHistory);
     }
-  }, [kiResult, trainingDays, calorieGoal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kiResult, trainingDays, calorieGoal, rules]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // ── Water ────────────────────────────────────────────────────────────────────
@@ -1154,10 +1205,11 @@ const KalorienTracker = () => {
             bodyMeasurements,
             bodyGoals,
             trainingDays,
-            calorieGoalRest: capDailyGoal(kiResult?.kcalGoalRestDay || calorieGoal || 1800),
+            calorieGoalRest: capDailyGoal(kiResult?.kcalGoalRestDay || calorieGoal || rules.kcalRestBase),
             macroGoals: kiResult,
             todayDate: todayKey,
             todayMeals,
+            rules,
           },
         }),
       });
@@ -1188,6 +1240,7 @@ const KalorienTracker = () => {
           blocks: cyclingBlocks.filter(b => b.minutes > 0),
           weightKg,
           ftpWatts: cyclingFtp ? +cyclingFtp : undefined,
+          rules,
         }),
       });
       const data = await res.json();
@@ -1206,7 +1259,11 @@ const KalorienTracker = () => {
     setLoadingRideSync(true);
     setCyclingError(null);
     try {
-      const rideRes = await fetch('/.netlify/functions/sync-ride');
+      const rideRes = await fetch('/.netlify/functions/sync-ride', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rules),
+      });
       const ride = await rideRes.json();
       if (!rideRes.ok) throw new Error(ride.error || 'Strava-Sync fehlgeschlagen');
       if (!ride.found) {
@@ -1242,6 +1299,7 @@ const KalorienTracker = () => {
             name:       ride.activity.name,
             zoneSource: ride.zoneSource,
           },
+          rules,
         }),
       });
       const data = await res.json();
@@ -1317,9 +1375,9 @@ const KalorienTracker = () => {
     // Vergessene Tage (< 1500 kcal echte Einträge, außer heute) → Tagesziel als Wert.
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
     // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
-    const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || 1800;
-    // Erhaltungskalorien-Basis (ohne Sport) für die Defizit-Anzeige – fix 2100 kcal
-    const tdeeNoSport = MAINTENANCE_BASE_KCAL;
+    const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase;
+    // Erhaltungskalorien-Basis (ohne Sport) für die Defizit-Anzeige
+    const tdeeNoSport = rules.maintenanceBase;
 
     const tracked = days;
     if (tracked.length === 0) return null;
@@ -1500,9 +1558,9 @@ const KalorienTracker = () => {
 
     // Makroziele
     const macroLine = kiResult?.macroGoalsRestDay
-      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal (immer 1900) | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
-Trainingstag: ${kiResult.kcalGoalRestDay} kcal Basis + volle (−25% korrigierte) Strava-kcal (Ziel min. 1900 kcal, keine Obergrenze) | P 150g | C 200g | F 85g
-Zone2/VO2max-Rad: | C 300g | F 85g`
+      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal (immer ${rules.kcalMinDaily}) | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
+Trainingstag: ${kiResult.kcalGoalRestDay} kcal Basis + volle (−${rules.stravaDeflation}% korrigierte) Strava-kcal (Ziel min. ${rules.kcalMinDaily} kcal, keine Obergrenze) | P ${rules.macroTrain.protein}g | C ${rules.macroTrain.carbs}g | F ${rules.macroTrain.fat}g
+Zone2/VO2max-Rad: | C ${rules.macroCycle.carbs}g | F ${rules.macroCycle.fat}g`
       : `Kalorienziel: ${calorieGoal} kcal`;
 
     const header = mode === 'training'
@@ -1511,10 +1569,10 @@ Zone2/VO2max-Rad: | C 300g | F 85g`
 Berücksichtige dabei:
 - Mein primäres Ziel ist Fettreduktion bei Erhalt der Muskelmasse und Regenerationsfähigkeit
 - Ich fahre hauptsächlich Radsport (Strava) mit gelegentlichem Kraft- und Lauftraining
-- Ruhetag: immer 1900 kcal | Sporttage: Basis 1800 kcal + volle (−25% korrigierte) Strava-kcal, kein zusätzlicher Eat-back-Abschlag
-- Tagesziel-Untergrenze 1900 kcal (Schlaf/Regeneration), keine Obergrenze mehr
-- Strava-Kalorien werden pauschal um 25% nach unten korrigiert (Überschätzung) – diese Korrektur dient nur der Genauigkeit, nicht dem Defizit
-- Das Defizit ergibt sich ausschließlich aus Erhaltungskalorien (2100 + Sport-kcal) minus Tagesziel und bleibt dadurch konstant ~300 kcal (Ruhetag ~200 kcal)
+- Ruhetag: immer ${rules.kcalMinDaily} kcal | Sporttage: Basis ${rules.kcalRestBase} kcal + volle (−${rules.stravaDeflation}% korrigierte) Strava-kcal, kein zusätzlicher Eat-back-Abschlag
+- Tagesziel-Untergrenze ${rules.kcalMinDaily} kcal (Schlaf/Regeneration), keine Obergrenze mehr
+- Strava-Kalorien werden pauschal um ${rules.stravaDeflation}% nach unten korrigiert (Überschätzung) – diese Korrektur dient nur der Genauigkeit, nicht dem Defizit
+- Das Defizit ergibt sich ausschließlich aus Erhaltungskalorien (${rules.maintenanceBase} + Sport-kcal) minus Tagesziel und bleibt dadurch konstant ~${rules.maintenanceBase - rules.kcalRestBase} kcal (Ruhetag ~${rules.maintenanceBase - rules.kcalMinDaily} kcal)
 - RED-S-Risiko vermeiden: kein extremes Defizit an Intensivtagen
 
 Erstelle einen konkreten Wochenplan mit:
@@ -1615,6 +1673,13 @@ ${trainingDays.filter(d => {
             >
               <Target className="w-4 h-4" />
               Makroziele
+            </button>
+            <button
+              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setShowRulesSettings(true); }}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
+            >
+              <Settings className="w-4 h-4" />
+              Regeln
             </button>
             <button
               onClick={manualNutritionSync}
@@ -1739,7 +1804,7 @@ ${trainingDays.filter(d => {
             {(() => {
               // Formel: Ruhetag immer 1900 kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag)
               const dayStrava = trainingDays.find(d => d.date === selectedDate);
-              const restBase = kiResult?.kcalGoalRestDay || 1800;
+              const restBase = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
               const effectiveGoal = isToday ? effectiveTodayGoal : capDailyGoal(restBase + sportKcalCredit(dayStrava));
               const isOver = totals.kcal > effectiveGoal;
               return (
@@ -1799,10 +1864,10 @@ ${trainingDays.filter(d => {
               {/* Erhaltungskalorien, geplantes & aktuelles Defizit */}
               {(() => {
                 const dayBurn        = dayStrava?.totalCalories || 0;
-                const erhaltung      = MAINTENANCE_BASE_KCAL + dayBurn;
+                const erhaltung      = rules.maintenanceBase + dayBurn;
                 const plannedDeficit = Math.round(erhaltung - effectiveGoal);
                 const actualDeficit  = Math.round(erhaltung - Math.round(totals.kcal));
-                const tone = (d) => d >= 200
+                const tone = (d) => d >= rules.referenceDeficit
                   ? 'text-emerald-700'
                   : d > 0
                     ? 'text-amber-700'
@@ -1913,12 +1978,12 @@ ${trainingDays.filter(d => {
               const dayStrava   = trainingDays.find(d => d.date === selectedDate);
               const sportKcal   = dayStrava?.totalCalories || 0;
               const netKcal     = Math.round(totals.kcal - sportKcal);
-              const erhaltung   = MAINTENANCE_BASE_KCAL + sportKcal;
-              const restBase_   = kiResult?.kcalGoalRestDay || 1800;
+              const erhaltung   = rules.maintenanceBase + sportKcal;
+              const restBase_   = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
               const goal_       = isToday ? effectiveTodayGoal : capDailyGoal(restBase_ + sportKcalCredit(dayStrava));
               const plannedDeficit = Math.round(erhaltung - goal_);
               const deficit     = Math.round(erhaltung - Math.round(totals.kcal));
-              const REFERENCE_DEFICIT = 200;
+              const REFERENCE_DEFICIT = rules.referenceDeficit;
               const deficitTone = deficit === null
                 ? { bg: 'bg-slate-50 border-slate-200', text: 'text-slate-600', num: 'text-slate-700' }
                 : deficit >= REFERENCE_DEFICIT
@@ -1935,7 +2000,7 @@ ${trainingDays.filter(d => {
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Erhaltungskalorien</p>
                       <p className="text-2xl font-bold text-slate-700 mono">{erhaltung}</p>
-                      <p className="text-xs text-slate-400 mt-1">{MAINTENANCE_BASE_KCAL} + {sportKcal} Sport</p>
+                      <p className="text-xs text-slate-400 mt-1">{rules.maintenanceBase} + {sportKcal} Sport</p>
                     </div>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Netto-Kalorien</p>
@@ -2685,7 +2750,7 @@ ${trainingDays.filter(d => {
                   {(() => {
                     const deficits = stats.dayData.filter(d => d.deficit !== null && d.date !== todayKey);
                     if (deficits.length === 0) return null;
-                    const REFERENCE_DEFICIT = 200;
+                    const REFERENCE_DEFICIT = rules.referenceDeficit;
                     const maxD  = Math.max(...deficits.map(d => d.deficit), REFERENCE_DEFICIT, 0);
                     const minD  = Math.min(...deficits.map(d => d.deficit), 0);
                     const range = (maxD - minD) || 1;
@@ -4071,6 +4136,164 @@ ${trainingDays.filter(d => {
                     setShowBodyGoalsModal(false);
                   }}
                   className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold shadow-lg transition text-sm"
+                >
+                  Speichern
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Regel-Einstellungen ── */}
+      {showRulesSettings && rulesDraft && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="bg-gradient-to-r from-slate-700 to-slate-800 text-white p-5 rounded-t-3xl flex items-center justify-between sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                <Settings className="w-6 h-6" />
+                <h2 className="text-lg font-bold">Regel-Einstellungen</h2>
+              </div>
+              <button onClick={() => setShowRulesSettings(false)} className="p-2 hover:bg-white/20 rounded-lg transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-6">
+              <p className="text-xs text-slate-400">
+                Alle Werte, die Kalorienziel, Strava-Korrektur, Makros und Carb-Schedule steuern. Nach dem
+                Speichern werden sie überall (Tag/Woche/Monat/Rad/KI-Coach) angewendet.
+              </p>
+
+              {/* Kalorienziel */}
+              <div>
+                <h3 className="text-sm font-bold text-slate-700 mb-3">Kalorienziel</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { key: 'kcalRestBase',    label: 'Basis (Ruhe/Sport)' },
+                    { key: 'kcalMinDaily',    label: 'Untergrenze' },
+                    { key: 'maintenanceBase', label: 'Erhaltungskalorien' },
+                    { key: 'referenceDeficit', label: 'Ziel-Defizit' },
+                  ].map(f => (
+                    <div key={f.key}>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">{f.label} <span className="text-slate-300">kcal</span></label>
+                      <input
+                        type="number"
+                        value={rulesDraft[f.key]}
+                        onChange={(e) => setRulesDraft({ ...rulesDraft, [f.key]: parseInt(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Strava-Korrektur */}
+              <div>
+                <h3 className="text-sm font-bold text-slate-700 mb-3">Strava-Korrektur</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { key: 'stravaDeflation',        label: 'Pauschal-Abzug',      unit: '%' },
+                    { key: 'walkHikeFactor',          label: 'Walk/Hike-Faktor',    unit: '%' },
+                    { key: 'shortZone2Factor',        label: 'Kurze Zone-2-Faktor', unit: '%' },
+                    { key: 'shortZone2ThresholdMin',  label: 'Schwelle "kurz"',     unit: 'min' },
+                  ].map(f => (
+                    <div key={f.key}>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">{f.label} <span className="text-slate-300">{f.unit}</span></label>
+                      <input
+                        type="number"
+                        value={rulesDraft[f.key]}
+                        onChange={(e) => setRulesDraft({ ...rulesDraft, [f.key]: parseInt(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 mt-3 text-sm text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={rulesDraft.useKjForPowerRides}
+                    onChange={(e) => setRulesDraft({ ...rulesDraft, useKjForPowerRides: e.target.checked })}
+                    className="w-4 h-4 rounded"
+                  />
+                  kJ-Vergleich bei Power-Meter-Rides nutzen (Min aus Strava-Korrektur und kJ)
+                </label>
+              </div>
+
+              {/* Makroziele */}
+              <div>
+                <h3 className="text-sm font-bold text-slate-700 mb-3">Makroziele (g/Tag)</h3>
+                {[
+                  { key: 'macroRest',  label: 'Ruhetag/Gehen' },
+                  { key: 'macroTrain', label: 'Laufen/Kraft' },
+                  { key: 'macroCycle', label: 'Zone2 ≥90min / VO2max-Rad' },
+                ].map(group => (
+                  <div key={group.key} className="mb-3">
+                    <p className="text-xs font-medium text-slate-500 mb-1">{group.label}</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {['protein', 'carbs', 'fat'].map(m => (
+                        <div key={m}>
+                          <input
+                            type="number"
+                            value={rulesDraft[group.key][m]}
+                            onChange={(e) => setRulesDraft({
+                              ...rulesDraft,
+                              [group.key]: { ...rulesDraft[group.key], [m]: parseInt(e.target.value) || 0 },
+                            })}
+                            className="w-full px-2 py-1.5 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm text-center"
+                          />
+                          <p className="text-[10px] text-slate-400 text-center mt-0.5">
+                            {m === 'protein' ? 'Protein' : m === 'carbs' ? 'Carbs' : 'Fett'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Ballaststoffe-Ziel <span className="text-slate-300">g</span></label>
+                  <input
+                    type="number"
+                    value={rulesDraft.fiberGoal}
+                    onChange={(e) => setRulesDraft({ ...rulesDraft, fiberGoal: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Carb-Schedule */}
+              <div>
+                <h3 className="text-sm font-bold text-slate-700 mb-3">Carb-Schedule Radeinheiten (g/h)</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { key: 'carbHour1',     label: '1. Stunde' },
+                    { key: 'carbHour2',     label: '2. Stunde' },
+                    { key: 'carbHour3plus', label: 'ab 3. Stunde' },
+                    { key: 'carbIntense',   label: 'Sehr intensiv (Z4–Z6)' },
+                  ].map(f => (
+                    <div key={f.key}>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">{f.label} <span className="text-slate-300">g/h</span></label>
+                      <input
+                        type="number"
+                        value={rulesDraft[f.key]}
+                        onChange={(e) => setRulesDraft({ ...rulesDraft, [f.key]: parseInt(e.target.value) || 0 })}
+                        className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setRulesDraft({ ...DEFAULT_RULES })}
+                  className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition text-sm"
+                >
+                  Zurücksetzen
+                </button>
+                <button
+                  onClick={() => saveRules(rulesDraft)}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 text-white font-bold shadow-lg transition text-sm"
                 >
                   Speichern
                 </button>

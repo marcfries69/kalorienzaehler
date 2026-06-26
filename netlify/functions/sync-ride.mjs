@@ -29,9 +29,6 @@ async function refreshAccessToken() {
   return data.access_token;
 }
 
-// Strava-Kalorien sind im Schnitt zu hoch angesetzt – pauschale Korrektur.
-const STRAVA_DEFLATION = 0.75;
-
 const isRideType = (t) => {
   const s = (t || '').toLowerCase();
   return s.includes('ride') || s.includes('cycling') || s.includes('virtual');
@@ -87,13 +84,21 @@ function estimateBlock(activity) {
   return [{ zone, minutes: mins }];
 }
 
-export default async () => {
+export default async (req) => {
   try {
     const missing = ['STRAVA_CLIENT_ID', 'STRAVA_CLIENT_SECRET', 'STRAVA_ADMIN_REFRESH_TOKEN']
       .filter(k => !Netlify.env.get(k));
     if (missing.length) {
       return Response.json({ error: `Fehlende Env Vars: ${missing.join(', ')}` }, { status: 500 });
     }
+
+    // Optionale Regel-Einstellungen aus dem Frontend (POST-Body), sonst Defaults
+    let rules = {};
+    if (req.method === 'POST') {
+      try { rules = await req.json(); } catch { rules = {}; }
+    }
+    const stravaDeflation    = (rules.stravaDeflation ?? 25) / 100;
+    const useKjForPowerRides = rules.useKjForPowerRides ?? true;
 
     const accessToken = await refreshAccessToken();
 
@@ -150,9 +155,9 @@ export default async () => {
     const movingMinutes = Math.round((ride.moving_time || 0) / 60);
 
     // Leistungsmesser-Check: kJ-Arbeit (1 kJ ≈ 1 kcal) als zuverlässigste Größe –
-    // nimm den niedrigeren Wert aus (-25%-korrigierter Strava-Schätzung, kJ).
-    let rideCalories = ride.calories ? Math.round(ride.calories * STRAVA_DEFLATION) : null;
-    if (ride.kilojoules > 0) {
+    // nimm den niedrigeren Wert aus (korrigierter Strava-Schätzung, kJ).
+    let rideCalories = ride.calories ? Math.round(ride.calories * stravaDeflation) : null;
+    if (useKjForPowerRides && ride.kilojoules > 0) {
       const kjAsKcal = Math.round(ride.kilojoules);
       if (rideCalories === null || kjAsKcal < rideCalories) rideCalories = kjAsKcal;
     }

@@ -29,7 +29,17 @@ export default async (req) => {
       currentKcalGoal,
       macroGoals,
       userProfile      = {},
+      rules            = {},
     } = await req.json();
+
+    // Konfigurierbare Regeln (Frontend-Einstellungen), mit robusten Defaults
+    const kcalRestBase    = rules.kcalRestBase    ?? 1800;
+    const minDaily         = rules.kcalMinDaily    ?? 1900;
+    const maintenanceBase = rules.maintenanceBase ?? 2100;
+    const macroRest  = rules.macroRest  ?? { protein: 150, carbs: 150, fat: 66 };
+    const macroTrain = rules.macroTrain ?? { protein: 150, carbs: 200, fat: 85 };
+    const macroCycle = rules.macroCycle ?? { protein: 150, carbs: 300, fat: 85 };
+    const fiberGoal  = rules.fiberGoal  ?? 35;
 
     // ── 1. Body trend ────────────────────────────────────────────────────────
     const sorted  = [...bodyMeasurements].sort((a, b) => a.date.localeCompare(b.date));
@@ -113,31 +123,27 @@ export default async (req) => {
     const highTrainingLoad = activeDays7 >= 5 || avgDailyBurn7 > 400;
     const redSRisk = (muscleLoss || muscleLossLong) && (rapidWeightLoss || highTrainingLoad);
 
-    // ── 6. Feste Kalorie- und Makro-Vorgaben ──────────────────────────────────
-    // Ruhetag: immer 1900 kcal. Sporttag: Basis 1800 kcal + volle (Stufe-1-korrigierte)
-    // Strava-Kalorien – kein Eat-back-Abschlag mehr. Die Korrektur (-25% in sync-training.mjs)
-    // dient nur der Überschätzung, nicht dem Defizit; das Defizit ergibt sich allein aus
-    // Erhaltungskalorien (2100 + Sport) minus Tagesziel und bleibt dadurch konstant ~300 kcal.
-    // Tagesziel-Untergrenze: nie unter 1900 (Schlaf/Regeneration). Keine Obergrenze mehr.
-    const MIN_DAILY_KCAL   = 1900;
-    const clampDaily       = (kcal) => Math.max(kcal, MIN_DAILY_KCAL);
-    const kcalGoalRestDay  = 1800;
+    // ── 6. Konfigurierbare Kalorie- und Makro-Vorgaben (aus Regel-Einstellungen) ──
+    // Ruhetag: immer kcalMinDaily. Sporttag: Basis kcalRestBase + volle (Stufe-1-korrigierte)
+    // Strava-Kalorien – kein Eat-back-Abschlag mehr. Die Strava-Korrektur dient nur der
+    // Überschätzung, nicht dem Defizit; das Defizit ergibt sich allein aus Erhaltungskalorien
+    // (maintenanceBase + Sport) minus Tagesziel und bleibt dadurch konstant.
+    // Tagesziel-Untergrenze: nie unter minDaily. Keine Obergrenze mehr.
+    const clampDaily       = (kcal) => Math.max(kcal, minDaily);
+    const kcalGoalRestDay  = kcalRestBase;
     // avgActiveDayBurn ist bereits Stufe-1-korrigiert (sync-training.mjs); volle Anrechnung
-    const kcalGoalTrainDay = clampDaily(1800 + avgActiveDayBurn);
+    const kcalGoalTrainDay = clampDaily(kcalRestBase + avgActiveDayBurn);
     const kcalGoal         = kcalGoalRestDay;
     const trainDayBonus    = avgActiveDayBurn;
     const deficitVsTdee    = tdeeBase ? tdeeBase - kcalGoalRestDay : null;
 
-    // Feste Makro-Gramm-Ziele (nicht prozentual) – Carbs nach Aktivitätstyp:
-    // Ruhetag / nur Gehen:              Protein 150g | Carbs 150g | Fett 66g | Faser 35g
-    // Laufen oder Krafttraining:        Protein 150g | Carbs 200g | Fett 85g | Faser 35g
-    // Zone 2 ≥ 90 min oder VO2max-Rad: Protein 150g | Carbs 300g | Fett 85g | Faser 35g
-    const macroGoalsRestDay   = { proteinG: 150, carbsG: 150, fatG: 66, fiberG: 35 };
-    const macroGoalsTrainDay  = { proteinG: 150, carbsG: 200, fatG: 85, fiberG: 35 };
-    const macroGoalsCycleDay  = { proteinG: 150, carbsG: 300, fatG: 85, fiberG: 35 };
+    // Feste Makro-Gramm-Ziele (nicht prozentual) – Carbs nach Aktivitätstyp
+    const macroGoalsRestDay   = { proteinG: macroRest.protein,  carbsG: macroRest.carbs,  fatG: macroRest.fat,  fiberG: fiberGoal };
+    const macroGoalsTrainDay  = { proteinG: macroTrain.protein, carbsG: macroTrain.carbs, fatG: macroTrain.fat, fiberG: fiberGoal };
+    const macroGoalsCycleDay  = { proteinG: macroCycle.protein, carbsG: macroCycle.carbs, fatG: macroCycle.fat, fiberG: fiberGoal };
 
-    const proteinMinG  = 150;
-    const proteinPerKg = bw ? +(150 / bw).toFixed(1) : 1.95;
+    const proteinMinG  = macroRest.protein;
+    const proteinPerKg = bw ? +(macroRest.protein / bw).toFixed(1) : 1.95;
 
     // Wöchentliches Defizit (Schätzung)
     const trainingDaysPerWeek = activeDays7;
@@ -160,14 +166,14 @@ export default async (req) => {
 - Alter: ${age} Jahre | Gewicht: ${bw ?? '–'} kg | Größe: ${height ?? '–'} cm
 - BMR: ${bmr ? Math.round(bmr) : '–'} kcal | TDEE Ruhetag: ${tdeeBase ?? '–'} kcal
 
-## FESTE ZIELE (nicht ändern)
-- Ruhetag: immer 1900 kcal | Trainingstag: Basis 1800 kcal + volle (-25% korrigierte) Strava-kcal, kein Eat-back-Abschlag
-- Tagesziel-Untergrenze 1900 kcal (Schlaf/Regeneration), keine Obergrenze
-- Strava-Kalorien werden pauschal um 25% nach unten korrigiert (Überschätzung) – dient nur der Genauigkeit, nicht dem Defizit
-- Defizit = Erhaltungskalorien (2100 + Sport-kcal) − Tagesziel, bleibt dadurch konstant ~300 kcal (Ruhetag ~200 kcal)
-- Makros Ruhetag/Gehen:   Protein 150g | Carbs 150g | Fett 66g
-- Makros Laufen/Kraft:    Protein 150g | Carbs 200g | Fett 85g
-- Makros Zone2 ≥90min/VO2max-Rad: Protein 150g | Carbs 300g | Fett 85g
+## FESTE ZIELE (nicht ändern, aus Regel-Einstellungen)
+- Ruhetag: immer ${minDaily} kcal | Trainingstag: Basis ${kcalRestBase} kcal + volle (-${rules.stravaDeflation ?? 25}% korrigierte) Strava-kcal, kein Eat-back-Abschlag
+- Tagesziel-Untergrenze ${minDaily} kcal (Schlaf/Regeneration), keine Obergrenze
+- Strava-Kalorien werden pauschal um ${rules.stravaDeflation ?? 25}% nach unten korrigiert (Überschätzung) – dient nur der Genauigkeit, nicht dem Defizit
+- Defizit = Erhaltungskalorien (${maintenanceBase} + Sport-kcal) − Tagesziel, bleibt dadurch konstant ~${maintenanceBase - kcalRestBase} kcal (Ruhetag ~${maintenanceBase - minDaily} kcal)
+- Makros Ruhetag/Gehen:   Protein ${macroRest.protein}g | Carbs ${macroRest.carbs}g | Fett ${macroRest.fat}g
+- Makros Laufen/Kraft:    Protein ${macroTrain.protein}g | Carbs ${macroTrain.carbs}g | Fett ${macroTrain.fat}g
+- Makros Zone2 ≥90min/VO2max-Rad: Protein ${macroCycle.protein}g | Carbs ${macroCycle.carbs}g | Fett ${macroCycle.fat}g
 - TDEE-Differenz Ruhetag: ${deficitVsTdee !== null ? (deficitVsTdee > 0 ? '+' : '') + deficitVsTdee + ' kcal vs. TDEE' : '–'}
 
 ## KÖRPER-TREND
