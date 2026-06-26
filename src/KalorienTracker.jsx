@@ -3369,10 +3369,10 @@ ${trainingDays.filter(d => {
                           <span className="font-semibold text-slate-600">Basis Ruhetag</span>
                           <span className="font-bold text-slate-700">{capDailyGoal(kiResult.kcalGoalRestDay)} kcal</span>
                         </div>
-                        {kiResult.kcalGoalRestDay < MIN_DAILY_KCAL && (
+                        {kiResult.kcalGoalRestDay < rules.kcalMinDaily && (
                           <div className="flex justify-between text-amber-600">
                             <span>↳ Sicherheits-Minimum angehoben</span>
-                            <span className="font-medium">{kiResult.kcalGoalRestDay} → {MIN_DAILY_KCAL}</span>
+                            <span className="font-medium">{kiResult.kcalGoalRestDay} → {rules.kcalMinDaily}</span>
                           </div>
                         )}
                         <div className="flex justify-between text-emerald-600">
