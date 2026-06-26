@@ -91,6 +91,7 @@ const KalorienTracker = () => {
   const [loadingBody, setLoadingBody] = useState(false);
   const [showBodyHistory, setShowBodyHistory] = useState(false);
   const [bodyChartRange, setBodyChartRange] = useState('weeks'); // 'weeks' | 'months'
+  const [showPdfMenu, setShowPdfMenu] = useState(false);
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [chatMessages, setChatMessages] = useState([]); // {role:'user'|'assistant', content:string}
@@ -157,26 +158,13 @@ const KalorienTracker = () => {
   }, [trainingDays, todayKey]);
 
   // ── PDF Export (14-Tage-Report) ───────────────────────────────────────────
-  const exportPDF = () => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageW = doc.internal.pageSize.getWidth();
-
-    // ── Header ────────────────────────────────────────────────────────────────
-    doc.setFillColor(20, 184, 166); // teal-500
-    doc.rect(0, 0, pageW, 28, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Ernährungs-Report – 14 Tage', 14, 12);
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
+  const exportPDF = (daysCount = 14) => {
     const exportDate = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    doc.text(`Exportiert am ${exportDate}`, 14, 22);
 
-    // ── Letzte 14 Tage sammeln ────────────────────────────────────────────────
-    const days14 = Array.from({ length: 14 }, (_, i) => {
+    // ── Zeitraum sammeln ──────────────────────────────────────────────────────
+    const days14 = Array.from({ length: daysCount }, (_, i) => {
       const d = new Date();
-      d.setDate(d.getDate() - (13 - i));
+      d.setDate(d.getDate() - (daysCount - 1 - i));
       return toDateKey(d);
     });
 
@@ -232,6 +220,10 @@ const KalorienTracker = () => {
     }, { kcal: 0, prot: 0, carbs: 0, fat: 0, fiber: 0, sport: 0 });
 
     // Landscape für mehr Spalten
+    const periodLabel = daysCount === 14 ? '14 Tage'
+      : daysCount % 7 === 0 ? `${daysCount / 7} Wochen`
+      : `${daysCount} Tage`;
+
     const docL = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const pageWL = docL.internal.pageSize.getWidth();
 
@@ -241,7 +233,7 @@ const KalorienTracker = () => {
     docL.setTextColor(255, 255, 255);
     docL.setFontSize(16);
     docL.setFont('helvetica', 'bold');
-    docL.text('Ernährungs- & Trainings-Report – 14 Tage', 14, 10);
+    docL.text(`Ernährungs- & Trainings-Report – ${periodLabel}`, 14, 10);
     docL.setFontSize(8);
     docL.setFont('helvetica', 'normal');
     docL.text(`Exportiert am ${exportDate}  ·  Kalorienmonitor`, 14, 18);
@@ -313,13 +305,20 @@ const KalorienTracker = () => {
       },
     });
 
-    const finalYL = docL.lastAutoTable.finalY + 10;
+    // Bei langen Zeiträumen (z.B. 12 Wochen) reicht die Tabelle über mehrere Seiten –
+    // Makro-Balken braucht eine neue Seite, wenn auf der letzten zu wenig Platz bleibt.
+    const pageHL0 = docL.internal.pageSize.getHeight();
+    let finalYL = docL.lastAutoTable.finalY + 10;
+    if (finalYL > pageHL0 - 40) {
+      docL.addPage();
+      finalYL = 20;
+    }
 
     // ── Makro-Balken ──────────────────────────────────────────────────────────
     docL.setFont('helvetica', 'bold');
     docL.setFontSize(10);
     docL.setTextColor(30, 41, 59);
-    docL.text('Ø Makro-Verteilung (14 Tage)', 14, finalYL);
+    docL.text(`Ø Makro-Verteilung (${periodLabel})`, 14, finalYL);
 
     const total = avg.prot + avg.carbs + avg.fat || 1;
     const pPct  = Math.round(avg.prot  / total * 100);
@@ -352,11 +351,8 @@ const KalorienTracker = () => {
     docL.setTextColor(148, 163, 184);
     docL.text('Kalorienmonitor · kalorienmonitor.netlify.app', pageWL / 2, pageHL - 5, { align: 'center' });
 
-    const filename = `ernaehrung-report-${exportDate.replace(/\./g, '-')}.pdf`;
+    const filename = `ernaehrung-report-${daysCount}t-${exportDate.replace(/\./g, '-')}.pdf`;
     docL.save(filename);
-
-    const finalY = doc.lastAutoTable.finalY + 10;
-
   };
 
   const messagesEndRef = useRef(null);
@@ -2277,13 +2273,33 @@ ${trainingDays.filter(d => {
                     </button>
                   )}
                 </div>
-                <button
-                  onClick={exportPDF}
-                  className="flex items-center gap-2 px-3 py-2 bg-teal-500 hover:bg-teal-600 text-white text-xs font-semibold rounded-xl transition-colors shadow-sm"
-                >
-                  <FileDown className="w-3.5 h-3.5" />
-                  14-Tage PDF
-                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setShowPdfMenu(v => !v)}
+                    className="flex items-center gap-2 px-3 py-2 bg-teal-500 hover:bg-teal-600 text-white text-xs font-semibold rounded-xl transition-colors shadow-sm"
+                  >
+                    <FileDown className="w-3.5 h-3.5" />
+                    PDF-Export
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showPdfMenu ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showPdfMenu && (
+                    <div className="absolute right-0 mt-1 w-36 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden z-10">
+                      {[
+                        { days: 14, label: '14 Tage' },
+                        { days: 28, label: '4 Wochen' },
+                        { days: 84, label: '12 Wochen' },
+                      ].map(opt => (
+                        <button
+                          key={opt.days}
+                          onClick={() => { exportPDF(opt.days); setShowPdfMenu(false); }}
+                          className="w-full text-left px-3 py-2 text-xs font-medium text-slate-700 hover:bg-teal-50 transition-colors"
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {!stats ? (
