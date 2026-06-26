@@ -72,6 +72,14 @@ const MICRO_TARGETS = [
   { key: 'folate',     label: 'Folsäure',    unit: 'µg',  goal: 300,  color: 'lime',    emoji: '🥦' },
 ];
 
+// ── Körper-Verlauf-Chart: wählbare Kennzahlen ────────────────────────────────
+const BODY_METRICS = [
+  { key: 'weight',      label: 'Gewicht',        unit: 'kg', color: '#3b82f6', goalKey: 'weight',      decimals: 1, lowerIsBetter: false },
+  { key: 'fatPct',      label: 'KFA',            unit: '%',  color: '#f97316', goalKey: 'fatPct',      decimals: 1, lowerIsBetter: true  },
+  { key: 'visceralFat', label: 'Viszerales Fett', unit: '',   color: '#ef4444', goalKey: 'visceralFat', decimals: 0, lowerIsBetter: true  },
+  { key: 'musclePct',   label: 'Muskelmasse',    unit: '%',  color: '#10b981', goalKey: 'musclePct',   decimals: 1, lowerIsBetter: false },
+];
+
 const DEFAULT_PRESETS = {
   rest:       { label: 'Rest Day',    emoji: '😴', kcal: 1800, proteinPct: 35, carbsPct: 30, fatPct: 35, fiberG: 25 },
   active:     { label: 'Active Day',  emoji: '🏃', kcal: 2200, proteinPct: 30, carbsPct: 45, fatPct: 25, fiberG: 30 },
@@ -120,6 +128,7 @@ const KalorienTracker = () => {
   const [loadingBody, setLoadingBody] = useState(false);
   const [showBodyHistory, setShowBodyHistory] = useState(false);
   const [bodyChartRange, setBodyChartRange] = useState('weeks'); // 'weeks' | 'months'
+  const [bodyChartMetric, setBodyChartMetric] = useState('weight'); // weight | fatPct | visceralFat | musclePct
   const [showPdfMenu, setShowPdfMenu] = useState(false);
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
@@ -3142,33 +3151,36 @@ ${trainingDays.filter(d => {
                 </button>
               </div>
 
-              {/* ── Gewichtsverlauf-Chart ── */}
+              {/* ── Körper-Verlauf-Chart (Gewicht/KFA/Viszeral/Muskeln) ── */}
               {bodyMeasurements.length > 1 && (() => {
+                const metric = BODY_METRICS.find(m => m.key === bodyChartMetric) || BODY_METRICS[0];
                 const data = getBodyTrend(bodyChartRange);
-                const weights = data.map(d => d.weight).filter(w => w != null);
-                if (weights.length < 2) return null;
+                const values = data.map(d => d[metric.key]).filter(v => v != null);
+                if (values.length < 2) return null;
 
-                const goalWeight = bodyGoals.weight;
-                const allVals = goalWeight ? [...weights, goalWeight] : weights;
-                const minW = Math.min(...allVals) - 0.5;
-                const maxW = Math.max(...allVals) + 0.5;
-                const range = (maxW - minW) || 1;
+                const goalVal = bodyGoals[metric.goalKey];
+                const allVals = goalVal != null ? [...values, goalVal] : values;
+                const pad  = (Math.max(...allVals) - Math.min(...allVals)) * 0.1 || 1;
+                const minV = Math.min(...allVals) - pad;
+                const maxV = Math.max(...allVals) + pad;
+                const range = (maxV - minV) || 1;
                 const W = 600, H = 180, padX = 28, padY = 18;
                 const plotW = W - padX * 2, plotH = H - padY * 2;
                 const xFor = (i) => padX + (data.length > 1 ? (i / (data.length - 1)) * plotW : plotW / 2);
-                const yFor = (w) => padY + plotH - ((w - minW) / range) * plotH;
+                const yFor = (v) => padY + plotH - ((v - minV) / range) * plotH;
                 const points = data
-                  .map((d, i) => (d.weight != null ? `${xFor(i)},${yFor(d.weight)}` : null))
+                  .map((d, i) => (d[metric.key] != null ? `${xFor(i)},${yFor(d[metric.key])}` : null))
                   .filter(Boolean)
                   .join(' ');
-                const goalY = goalWeight ? yFor(goalWeight) : null;
+                const goalY = goalVal != null ? yFor(goalVal) : null;
                 const labelStride = Math.max(1, Math.ceil(data.length / 6));
+                const fmt = (v) => v.toFixed(metric.decimals);
 
                 return (
                   <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                       <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
-                        <Scale className="w-4 h-4 text-blue-600" /> Gewichtsverlauf
+                        <Scale className="w-4 h-4" style={{ color: metric.color }} /> Körper-Verlauf
                       </h3>
                       <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5">
                         {[{ key: 'weeks', label: 'Wochen' }, { key: 'months', label: 'Monate' }].map(r => (
@@ -3184,16 +3196,30 @@ ${trainingDays.filter(d => {
                         ))}
                       </div>
                     </div>
+                    <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5 mb-3 w-fit">
+                      {BODY_METRICS.map(m => (
+                        <button
+                          key={m.key}
+                          onClick={() => setBodyChartMetric(m.key)}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                            bodyChartMetric === m.key ? 'bg-white shadow' : 'text-slate-500'
+                          }`}
+                          style={bodyChartMetric === m.key ? { color: m.color } : undefined}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
                     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '180px' }}>
                       {goalY != null && (
                         <>
                           <line x1={padX} y1={goalY} x2={W - padX} y2={goalY} stroke="#10b981" strokeDasharray="4 4" strokeWidth="1" />
-                          <text x={W - padX} y={goalY - 4} textAnchor="end" fontSize="9" fill="#10b981">Ziel {goalWeight}kg</text>
+                          <text x={W - padX} y={goalY - 4} textAnchor="end" fontSize="9" fill="#10b981">Ziel {fmt(goalVal)}{metric.unit}</text>
                         </>
                       )}
-                      <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="2" />
-                      {data.map((d, i) => d.weight != null && (
-                        <circle key={i} cx={xFor(i)} cy={yFor(d.weight)} r="3" fill="#3b82f6" />
+                      <polyline points={points} fill="none" stroke={metric.color} strokeWidth="2" />
+                      {data.map((d, i) => d[metric.key] != null && (
+                        <circle key={i} cx={xFor(i)} cy={yFor(d[metric.key])} r="3" fill={metric.color} />
                       ))}
                       {data.map((d, i) => (
                         (i === 0 || i === data.length - 1 || i % labelStride === 0) && (
@@ -3206,8 +3232,8 @@ ${trainingDays.filter(d => {
                       ))}
                     </svg>
                     <div className="flex justify-between mt-1 text-xs text-slate-400">
-                      <span>{weights[0]} kg</span>
-                      <span className="font-semibold text-slate-600">{weights[weights.length - 1]} kg aktuell</span>
+                      <span>{fmt(values[0])}{metric.unit}</span>
+                      <span className="font-semibold text-slate-600">{fmt(values[values.length - 1])}{metric.unit} aktuell</span>
                     </div>
                   </div>
                 );
