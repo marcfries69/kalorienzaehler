@@ -179,22 +179,26 @@ const KalorienTracker = () => {
   const [rulesDraft, setRulesDraft] = useState(null);
   const [validatingRules, setValidatingRules] = useState(false);
   const [rulesErrors, setRulesErrors] = useState([]);
+  const [rulesWarnings, setRulesWarnings] = useState([]);
 
   const saveRules = (next) => {
     setRules(next);
     localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(next));
-    setShowRulesSettings(false);
     setRulesErrors([]);
     // KI-Cache invalidieren, da Basis/Makro-Regeln sich geändert haben könnten
     localStorage.removeItem('ki-result');
     setKiResult(null);
   };
 
-  // Speicherung wird erst wirksam, wenn die KI keine Inkonsistenzen mehr findet
-  // (Mathe-/Logik-Checks + qualitative Plausibilitätsprüfung via Claude).
+  // Speicherung wird erst wirksam, wenn die deterministischen Mathe-/Logik-Checks
+  // fehlerfrei sind. Die KI-Plausibilitätsprüfung (RED-S, Makro-Balance) liefert nur
+  // beratende Hinweise (warnings) und blockiert nicht – verschachtelte Prozentsätze
+  // (Pauschalkorrektur × Aktivitätsfaktor) werden ihr bereits fertig vorgerechnet,
+  // damit sie sich dabei nicht vertun kann.
   const validateAndSaveRules = async (draft) => {
     setValidatingRules(true);
     setRulesErrors([]);
+    setRulesWarnings([]);
     try {
       const res = await fetch('/.netlify/functions/validate-rules', {
         method: 'POST',
@@ -205,6 +209,11 @@ const KalorienTracker = () => {
       if (!res.ok) throw new Error(data.error || 'Validierung fehlgeschlagen');
       if (data.valid) {
         saveRules(draft);
+        if (data.warnings?.length) {
+          setRulesWarnings(data.warnings); // Modal bleibt offen, zeigt Hinweise
+        } else {
+          setShowRulesSettings(false);
+        }
       } else {
         setRulesErrors(data.errors?.length ? data.errors : ['Unbekannte Inkonsistenz gefunden.']);
       }
@@ -1703,7 +1712,7 @@ ${trainingDays.filter(d => {
               Makroziele
             </button>
             <button
-              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setRulesErrors([]); setShowRulesSettings(true); }}
+              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setRulesErrors([]); setRulesWarnings([]); setShowRulesSettings(true); }}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
             >
               <Settings className="w-4 h-4" />
@@ -4182,7 +4191,7 @@ ${trainingDays.filter(d => {
                 <Settings className="w-6 h-6" />
                 <h2 className="text-lg font-bold">Regel-Einstellungen</h2>
               </div>
-              <button onClick={() => { setShowRulesSettings(false); setRulesErrors([]); }} className="p-2 hover:bg-white/20 rounded-lg transition">
+              <button onClick={() => { setShowRulesSettings(false); setRulesErrors([]); setRulesWarnings([]); }} className="p-2 hover:bg-white/20 rounded-lg transition">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -4326,9 +4335,23 @@ ${trainingDays.filter(d => {
                 </div>
               )}
 
+              {rulesWarnings.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <p className="text-sm font-bold text-amber-700 mb-2 flex items-center gap-1.5">
+                    <Check className="w-4 h-4" /> Gespeichert – KI-Hinweise zur Beachtung
+                  </p>
+                  <ul className="space-y-1.5">
+                    {rulesWarnings.map((w, i) => (
+                      <li key={i} className="text-xs text-amber-600 leading-relaxed">• {w}</li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-amber-400 mt-2">Beratende Hinweise – die Regeln wurden trotzdem übernommen.</p>
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <button
-                  onClick={() => { setRulesDraft({ ...DEFAULT_RULES }); setRulesErrors([]); }}
+                  onClick={() => { setRulesDraft({ ...DEFAULT_RULES }); setRulesErrors([]); setRulesWarnings([]); }}
                   disabled={validatingRules}
                   className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition text-sm disabled:opacity-50"
                 >
