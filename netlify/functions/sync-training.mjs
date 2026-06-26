@@ -80,8 +80,8 @@ function estimateCalories(activity, weightKg = 75) {
 }
 
 // Strava-Kalorien (gemeldet wie geschätzt) sind im Schnitt zu hoch angesetzt.
-// Pauschale Korrektur von -20% auf alle Werte, bevor weitere Anteil-Regeln greifen.
-const STRAVA_DEFLATION = 0.8;
+// Pauschale Korrektur von -25% auf alle Werte, bevor weitere Anteil-Regeln greifen.
+const STRAVA_DEFLATION = 0.75;
 
 function activityCategory(type) {
   const t = (type || '').toLowerCase();

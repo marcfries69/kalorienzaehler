@@ -51,8 +51,9 @@ export default async (req) => {
 
     const macroText = [
       `Kalorienziel Ruhetag: ${calorieGoalRest} kcal`,
-      `Ruhetag: immer 1900 kcal | Trainingstag: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max/Intervall→90%, >120min→88%, 60-120min→70%, ≤60min→55%), Tagesziel begrenzt auf 1900–3000 kcal`,
-      `Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)`,
+      `Ruhetag: immer 1900 kcal | Trainingstag: Basis 1800 kcal + volle (-25% korrigierte) Strava-kcal, kein Eat-back-Abschlag, Tagesziel-Untergrenze 1900 kcal (keine Obergrenze)`,
+      `Strava-Kalorien werden pauschal um 25% nach unten korrigiert (Überschätzung) – dient nur der Genauigkeit, nicht dem Defizit`,
+      `Defizit = Erhaltungskalorien (2100 + Sport-kcal) − Tagesziel, bleibt dadurch konstant ~300 kcal (Ruhetag ~200 kcal)`,
       `Makroziel Ruhetag/Gehen: Protein 150g | Carbs 150g | Fett 66g`,
       `Makroziel Laufen/Kraft: Protein 150g | Carbs 200g | Fett 85g`,
       `Makroziel Zone2 ≥90min / VO2max-Rad: Protein 150g | Carbs 300g | Fett 85g`,
