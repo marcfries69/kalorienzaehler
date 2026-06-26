@@ -40,8 +40,8 @@ const getEatbackFactor = (training) => {
 const tieredEatback = (training) =>
   Math.round((training?.totalCalories || 0) * getEatbackFactor(training));
 
-// Tagesziel-Grenzen: nie unter 2000 (Schlaf/Regeneration) und nie über 3000 kcal.
-const MIN_DAILY_KCAL = 2000;
+// Tagesziel-Grenzen: nie unter 1900 (Schlaf/Regeneration) und nie über 3000 kcal.
+const MIN_DAILY_KCAL = 1900;
 const MAX_DAILY_KCAL = 3000;
 const capDailyGoal = (kcal) => Math.min(Math.max(Math.round(kcal || 0), MIN_DAILY_KCAL), MAX_DAILY_KCAL);
 
@@ -153,7 +153,7 @@ const KalorienTracker = () => {
   const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
 
   // ── Auto-computed effective daily goal ───────────────────────────────────────
-  // Formel: Ruhetag immer 2000 kcal. Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag).
+  // Formel: Ruhetag immer 1900 kcal. Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag).
   // VO2max-Schutz läuft ausschließlich über den 90%-Eat-back-Tier, nicht über eine erhöhte Basis.
   const effectiveTodayGoal = useMemo(() => {
     const todayTraining = trainingDays.find(d => d.date === todayKey);
@@ -619,7 +619,7 @@ const KalorienTracker = () => {
       adjustedGoal  = capDailyGoal(restBase + trainingBonus);
       reasonParts.push(`Trainingstag: ${adjustedGoal} kcal (${restBase} Basis + ${trainingBonus} von ${rawBurn} Strava −${pctAbzug}%, ${today.totalMinutes} Min)`);
     } else {
-      // Rest day – nie unter 2000 kcal (Schlaf/Regeneration)
+      // Rest day – nie unter 1900 kcal (Schlaf/Regeneration)
       adjustedGoal = capDailyGoal(kiResult?.kcalGoalRestDay || 1800);
       reasonParts.push(`Ruhetag: ${adjustedGoal} kcal`);
     }
@@ -1380,8 +1380,8 @@ const KalorienTracker = () => {
 
     // Makroziele
     const macroLine = kiResult?.macroGoalsRestDay
-      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal (immer 2000) | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
-Trainingstag: ${kiResult.kcalGoalRestDay} kcal Basis + Strava-kcal inkl. tiered eat-back (Ziel begrenzt auf 2000–3000 kcal) | P 150g | C 200g | F 85g
+      ? `Ruhetag: ${capDailyGoal(kiResult.kcalGoalRestDay)} kcal (immer 1900) | P ${kiResult.macroGoalsRestDay.proteinG}g | C ${kiResult.macroGoalsRestDay.carbsG}g | F ${kiResult.macroGoalsRestDay.fatG}g
+Trainingstag: ${kiResult.kcalGoalRestDay} kcal Basis + Strava-kcal inkl. tiered eat-back (Ziel begrenzt auf 1900–3000 kcal) | P 150g | C 200g | F 85g
 Zone2/VO2max-Rad: | C 300g | F 85g`
       : `Kalorienziel: ${calorieGoal} kcal`;
 
@@ -1391,8 +1391,8 @@ Zone2/VO2max-Rad: | C 300g | F 85g`
 Berücksichtige dabei:
 - Mein primäres Ziel ist Fettreduktion bei Erhalt der Muskelmasse und Regenerationsfähigkeit
 - Ich fahre hauptsächlich Radsport (Strava) mit gelegentlichem Kraft- und Lauftraining
-- Ruhetag: immer 2000 kcal | Sporttage: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
-- Tagesziel ist begrenzt auf 2000–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
+- Ruhetag: immer 1900 kcal | Sporttage: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
+- Tagesziel ist begrenzt auf 1900–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
 - Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Tägliches Defizit soll 200–500 kcal bleiben (nie über 500!)
 - RED-S-Risiko vermeiden: kein extremes Defizit an Intensivtagen
@@ -1599,7 +1599,7 @@ ${trainingDays.filter(d => {
 
             {/* Summary card */}
             {(() => {
-              // Formel: Ruhetag immer 2000 kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag)
+              // Formel: Ruhetag immer 1900 kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag)
               const dayStrava = trainingDays.find(d => d.date === selectedDate);
               const restBase = kiResult?.kcalGoalRestDay || 1800;
               const effectiveGoal = isToday ? effectiveTodayGoal : capDailyGoal(restBase + tieredEatback(dayStrava));

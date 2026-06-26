@@ -19,7 +19,7 @@ export default async (req) => {
       bodyMeasurements = [],
       bodyGoals        = null,
       trainingDays     = [],
-      calorieGoalRest  = 2000,
+      calorieGoalRest  = 1900,
       macroGoals       = {},
       todayDate        = '',
       todayMeals       = [],
@@ -51,7 +51,7 @@ export default async (req) => {
 
     const macroText = [
       `Kalorienziel Ruhetag: ${calorieGoalRest} kcal`,
-      `Ruhetag: immer 2000 kcal | Trainingstag: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max/Intervall→90%, >120min→88%, 60-120min→70%, ≤60min→55%), Tagesziel begrenzt auf 2000–3000 kcal`,
+      `Ruhetag: immer 1900 kcal | Trainingstag: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max/Intervall→90%, >120min→88%, 60-120min→70%, ≤60min→55%), Tagesziel begrenzt auf 1900–3000 kcal`,
       `Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)`,
       `Makroziel Ruhetag/Gehen: Protein 150g | Carbs 150g | Fett 66g`,
       `Makroziel Laufen/Kraft: Protein 150g | Carbs 200g | Fett 85g`,

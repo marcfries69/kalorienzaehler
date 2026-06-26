@@ -114,11 +114,11 @@ export default async (req) => {
     const redSRisk = (muscleLoss || muscleLossLong) && (rapidWeightLoss || highTrainingLoad);
 
     // ── 6. Feste Kalorie- und Makro-Vorgaben ──────────────────────────────────
-    // Ruhetag: immer 2000 kcal. Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag).
+    // Ruhetag: immer 1900 kcal. Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag).
     // VO2max-Schutz läuft ausschließlich über den 90%-Eat-back-Tier (frontend), nicht über
     // eine erhöhte Basis – damit ist die Formel für alle Tage einheitlich.
-    // Tagesziel-Grenzen: nie unter 2000 (Schlaf/Regeneration) und nie über 3000 kcal.
-    const MIN_DAILY_KCAL   = 2000;
+    // Tagesziel-Grenzen: nie unter 1900 (Schlaf/Regeneration) und nie über 3000 kcal.
+    const MIN_DAILY_KCAL   = 1900;
     const MAX_DAILY_KCAL   = 3000;
     const clampDaily       = (kcal) => Math.min(Math.max(kcal, MIN_DAILY_KCAL), MAX_DAILY_KCAL);
     const kcalGoalRestDay  = 1800;
@@ -162,8 +162,8 @@ export default async (req) => {
 - BMR: ${bmr ? Math.round(bmr) : '–'} kcal | TDEE Ruhetag: ${tdeeBase ?? '–'} kcal
 
 ## FESTE ZIELE (nicht ändern)
-- Ruhetag: immer 2000 kcal | Trainingstag: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
-- Tagesziel ist begrenzt auf 2000–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
+- Ruhetag: immer 1900 kcal | Trainingstag: Basis 1800 kcal + Strava-kcal inkl. tiered eat-back (VO2max→90%, >120min→88%, 60-120min→70%, ≤60min→55%)
+- Tagesziel ist begrenzt auf 1900–3000 kcal (Untergrenze schützt Schlaf/Regeneration, Obergrenze deckelt Trainingstage)
 - Strava-Kalorien werden pauschal um 20% nach unten korrigiert (Überschätzung)
 - Makros Ruhetag/Gehen:   Protein 150g | Carbs 150g | Fett 66g
 - Makros Laufen/Kraft:    Protein 150g | Carbs 200g | Fett 85g
