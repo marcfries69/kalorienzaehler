@@ -1347,7 +1347,9 @@ const KalorienTracker = () => {
       const sportKcal    = training?.totalCalories || 0;
       const net          = Math.round(kcalDisplay - sportKcal);
       // Erhaltungskalorien = 2100 (tdeeNoSport) + sportKcal = tdeeNoSport - net (äquivalent umgestellt)
+      const erhaltung    = tdeeNoSport + sportKcal;
       const deficit      = Math.round(tdeeNoSport - net);
+      const plannedDeficit = Math.round(erhaltung - dayGoal);
       return {
         date:        d,
         kcal:        kcalLogged,
@@ -1359,6 +1361,8 @@ const KalorienTracker = () => {
         fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
         water:   waterHistory[d] || 0,
         goal:    dayGoal,
+        erhaltung,
+        plannedDeficit,
         sport:   sportKcal,
         net,
         deficit,
@@ -1371,6 +1375,9 @@ const KalorienTracker = () => {
     const netDays      = dayData.filter(d => d.date !== todayKey);
     const deficitDays  = dayData.filter(d => d.deficit !== null && d.date !== todayKey);
     const deficitSum   = deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0)) : null;
+    // Geplantes Defizit basiert auf dem Tagesziel (nicht der tatsächlichen Aufnahme) und ist
+    // daher auch für den laufenden Tag gültig – kein Ausschluss von "heute" nötig.
+    const plannedDeficitSum = Math.round(dayData.reduce((s, d) => s + d.plannedDeficit, 0));
 
     return {
       avg: {
@@ -1382,6 +1389,8 @@ const KalorienTracker = () => {
         sport: Math.round(sums.sport / n),
         net: netDays.length ? Math.round(netDays.reduce((s, d) => s + d.net, 0) / netDays.length) : null,
         deficit: deficitDays.length ? Math.round(deficitSum / deficitDays.length) : null,
+        erhaltung: Math.round(dayData.reduce((s, d) => s + d.erhaltung, 0) / dayData.length),
+        plannedDeficit: Math.round(plannedDeficitSum / dayData.length),
       },
       trackedDays: n,
       totalDays: days.length,
@@ -1391,6 +1400,7 @@ const KalorienTracker = () => {
       tdeeNoSport,
       deficitSum,
       deficitDaysCount: deficitDays.length,
+      plannedDeficitSum,
     };
   };
 
@@ -1767,25 +1777,35 @@ ${trainingDays.filter(d => {
                 );
               })()}
 
-              {/* Tagesdefizit-Badge (Erhaltung 2100 + Sport − Essen) */}
+              {/* Erhaltungskalorien, geplantes & aktuelles Defizit */}
               {(() => {
-                const dayBurn = dayStrava?.totalCalories || 0;
-                const erhaltung = MAINTENANCE_BASE_KCAL + dayBurn;
-                const deficit = Math.round(erhaltung - Math.round(totals.kcal));
-                const tone = deficit >= 200
-                  ? { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700' }
-                  : deficit > 0
-                    ? { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700' }
-                    : { bg: 'bg-rose-50 border-rose-200', text: 'text-rose-700' };
+                const dayBurn        = dayStrava?.totalCalories || 0;
+                const erhaltung      = MAINTENANCE_BASE_KCAL + dayBurn;
+                const plannedDeficit = Math.round(erhaltung - effectiveGoal);
+                const actualDeficit  = Math.round(erhaltung - Math.round(totals.kcal));
+                const tone = (d) => d >= 200
+                  ? 'text-emerald-700'
+                  : d > 0
+                    ? 'text-amber-700'
+                    : 'text-rose-700';
                 return (
-                  <div className={`flex items-center gap-2 mb-3 px-3 py-2 rounded-xl text-xs ${tone.bg} ${tone.text}`}>
-                    <Flame className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="leading-tight font-semibold">
-                      {deficit >= 0 ? 'Defizit' : 'Überschuss'} {deficit >= 0 ? '−' : '+'}{Math.abs(deficit)} kcal
-                    </span>
-                    <span className="text-slate-400 font-normal">
-                      (Erhaltung {erhaltung} − Essen {Math.round(totals.kcal)})
-                    </span>
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                      <p className="text-[10px] text-slate-400 uppercase tracking-wide">Erhaltung</p>
+                      <p className="text-sm font-bold text-slate-700 mono">{erhaltung}</p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                      <p className="text-[10px] text-slate-400 uppercase tracking-wide">Geplantes Defizit</p>
+                      <p className={`text-sm font-bold mono ${tone(plannedDeficit)}`}>
+                        {plannedDeficit >= 0 ? '−' : '+'}{Math.abs(plannedDeficit)}
+                      </p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                      <p className="text-[10px] text-slate-400 uppercase tracking-wide">Aktuelles Defizit</p>
+                      <p className={`text-sm font-bold mono ${tone(actualDeficit)}`}>
+                        {actualDeficit >= 0 ? '−' : '+'}{Math.abs(actualDeficit)}
+                      </p>
+                    </div>
                   </div>
                 );
               })()}
@@ -1875,6 +1895,9 @@ ${trainingDays.filter(d => {
               const sportKcal   = dayStrava?.totalCalories || 0;
               const netKcal     = Math.round(totals.kcal - sportKcal);
               const erhaltung   = MAINTENANCE_BASE_KCAL + sportKcal;
+              const restBase_   = kiResult?.kcalGoalRestDay || 1800;
+              const goal_       = isToday ? effectiveTodayGoal : capDailyGoal(restBase_ + sportKcalCredit(dayStrava));
+              const plannedDeficit = Math.round(erhaltung - goal_);
               const deficit     = Math.round(erhaltung - Math.round(totals.kcal));
               const REFERENCE_DEFICIT = 200;
               const deficitTone = deficit === null
@@ -1889,19 +1912,33 @@ ${trainingDays.filter(d => {
                   <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2">
                     <Flame className="w-4 h-4 text-rose-500" /> Netto-Kalorien & Defizit
                   </h3>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
+                      <p className="text-xs text-slate-500 mb-1">Erhaltungskalorien</p>
+                      <p className="text-2xl font-bold text-slate-700 mono">{erhaltung}</p>
+                      <p className="text-xs text-slate-400 mt-1">{MAINTENANCE_BASE_KCAL} + {sportKcal} Sport</p>
+                    </div>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Netto-Kalorien</p>
                       <p className="text-2xl font-bold text-slate-700 mono">{netKcal}</p>
                       <p className="text-xs text-slate-400 mt-1">{Math.round(totals.kcal)} Essen − {sportKcal} Sport</p>
                     </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-center">
+                      <p className="text-xs text-indigo-600 mb-1">Geplantes Defizit</p>
+                      <p className="text-2xl font-bold mono text-indigo-800">
+                        {plannedDeficit >= 0 ? '−' : '+'}{Math.abs(plannedDeficit)}
+                      </p>
+                      <p className="text-xs text-indigo-400 mt-1">Erhaltung {erhaltung} − Tagesziel {goal_}</p>
+                    </div>
                     <div className={`border rounded-xl p-4 text-center ${deficitTone.bg}`}>
-                      <p className={`text-xs mb-1 ${deficitTone.text}`}>{deficit === null ? 'Defizit' : deficit >= 0 ? 'Defizit' : 'Überschuss'}</p>
+                      <p className={`text-xs mb-1 ${deficitTone.text}`}>{deficit === null ? 'Defizit' : deficit >= 0 ? 'Defizit' : 'Überschuss'} (aktuell)</p>
                       <p className={`text-2xl font-bold mono ${deficitTone.num}`}>
                         {deficit === null ? '–' : `${deficit >= 0 ? '−' : '+'}${Math.abs(deficit)}`}
                       </p>
                       <p className="text-xs text-slate-400 mt-1">
-                        Erhaltung {erhaltung} ({MAINTENANCE_BASE_KCAL} + {sportKcal} Sport) − Essen {Math.round(totals.kcal)} · Ziel ~{REFERENCE_DEFICIT} kcal
+                        Erhaltung {erhaltung} − Essen {Math.round(totals.kcal)} · Ziel ~{REFERENCE_DEFICIT} kcal
                       </p>
                     </div>
                   </div>
@@ -2437,7 +2474,25 @@ ${trainingDays.filter(d => {
                         <p className="text-xs text-slate-400 mt-1">Ø Essen − Sport · ohne heute</p>
                       </div>
 
-                      {/* Deficit – kumuliert über den Zeitraum */}
+                      {/* Erhaltungskalorien average */}
+                      <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl p-4">
+                        <p className="text-orange-600 text-xs font-semibold uppercase tracking-wide mb-1">Erhaltung</p>
+                        <p className="text-2xl font-bold mono text-orange-900">{stats.avg.erhaltung}</p>
+                        <p className="text-xs text-orange-400 mt-1">Ø 2100 + Sport/Tag</p>
+                      </div>
+
+                      {/* Geplantes Defizit – kumuliert + Ø */}
+                      <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-4">
+                        <p className="text-indigo-600 text-xs font-semibold uppercase tracking-wide mb-1">Geplantes Defizit</p>
+                        <p className="text-2xl font-bold mono text-indigo-900">
+                          {stats.plannedDeficitSum >= 0 ? '−' : '+'}{Math.abs(stats.plannedDeficitSum)}
+                        </p>
+                        <p className="text-xs text-indigo-400 mt-1">
+                          Ø {stats.avg.plannedDeficit >= 0 ? '−' : '+'}{Math.abs(stats.avg.plannedDeficit)}/Tag · Erhaltung − Tagesziel
+                        </p>
+                      </div>
+
+                      {/* Deficit – kumuliert über den Zeitraum (aktuell, basierend auf realer Aufnahme) */}
                       {(() => {
                         const sum = stats.deficitSum;
                         const avgD = stats.avg.deficit;
@@ -2449,7 +2504,7 @@ ${trainingDays.filter(d => {
                         return (
                           <div className={`bg-gradient-to-br ${tone.bg} border ${tone.border} rounded-xl p-4`}>
                             <p className={`${tone.text} text-xs font-semibold uppercase tracking-wide mb-1`}>
-                              {sum === null ? 'Defizit' : sum >= 0 ? 'Defizit (Zeitraum)' : 'Überschuss (Zeitraum)'}
+                              {sum === null ? 'Defizit (aktuell)' : sum >= 0 ? 'Defizit (aktuell)' : 'Überschuss (aktuell)'}
                             </p>
                             <p className={`text-2xl font-bold mono ${tone.num}`}>
                               {sum === null ? '–' : `${sum >= 0 ? '−' : '+'}${Math.abs(sum)}`}
