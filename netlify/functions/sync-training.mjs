@@ -172,7 +172,19 @@ export default async (req) => {
         caloriesFactor = 0.75;
         caloriesSource = reportedCal > 10 ? 'strava_75pct' : 'estimated_75pct';
       }
-      const calories = Math.round(rawCalories * caloriesFactor * STRAVA_DEFLATION);
+      let calories = Math.round(rawCalories * caloriesFactor * STRAVA_DEFLATION);
+
+      // Leistungsmesser-Check (Rad): kJ-Arbeit ist die zuverlässigste verfügbare Größe
+      // (Daumenregel 1 kJ ≈ 1 kcal). Nimm den niedrigeren Wert aus (-25%-korrigierter
+      // Strava-Schätzung, kJ-Wert) – schützt zusätzlich vor Überschätzung bei Power-Rides.
+      const kj = a.kilojoules || 0;
+      if (isRide && kj > 0) {
+        const kjAsKcal = Math.round(kj);
+        if (kjAsKcal < calories) {
+          calories = kjAsKcal;
+          caloriesSource = 'kilojoules';
+        }
+      }
 
       // Deduplizierung: gleicher Name + ähnliche Dauer (±10 min) → Duplikat überspringen
       // (passiert wenn Strava-App + Watch dieselbe Einheit aufzeichnen)

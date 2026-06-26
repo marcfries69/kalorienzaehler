@@ -149,6 +149,14 @@ export default async () => {
 
     const movingMinutes = Math.round((ride.moving_time || 0) / 60);
 
+    // Leistungsmesser-Check: kJ-Arbeit (1 kJ ≈ 1 kcal) als zuverlässigste Größe –
+    // nimm den niedrigeren Wert aus (-25%-korrigierter Strava-Schätzung, kJ).
+    let rideCalories = ride.calories ? Math.round(ride.calories * STRAVA_DEFLATION) : null;
+    if (ride.kilojoules > 0) {
+      const kjAsKcal = Math.round(ride.kilojoules);
+      if (rideCalories === null || kjAsKcal < rideCalories) rideCalories = kjAsKcal;
+    }
+
     return Response.json({
       found: true,
       activity: {
@@ -157,7 +165,7 @@ export default async () => {
         date:          (ride.start_date_local || ride.start_date || '').slice(0, 10),
         startTime:     ride.start_date_local || ride.start_date,
         movingMinutes,
-        calories:      ride.calories ? Math.round(ride.calories * STRAVA_DEFLATION) : null,
+        calories:      rideCalories,
         avgHR:         ride.average_heartrate || null,
         maxHR:         ride.max_heartrate || null,
         avgWatts:      ride.weighted_average_watts || ride.average_watts || null,
