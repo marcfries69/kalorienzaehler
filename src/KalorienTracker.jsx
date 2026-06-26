@@ -1384,8 +1384,11 @@ const KalorienTracker = () => {
     });
 
     const maxKcal = Math.max(...dayData.map(d => Math.max(d.kcalDisplay || d.kcal, d.goal)), 1);
-    const deficitDays = dayData.filter(d => d.deficit !== null);
-    const deficitSum  = deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0)) : null;
+    // Heute ist noch nicht abgeschlossen (Essen/Sport ggf. noch nicht vollständig erfasst) →
+    // aus Netto-/Defizit-Berechnungen ausschließen, sonst verzerrt der unvollständige Tag den Schnitt.
+    const netDays      = dayData.filter(d => d.date !== todayKey);
+    const deficitDays  = dayData.filter(d => d.deficit !== null && d.date !== todayKey);
+    const deficitSum   = deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0)) : null;
 
     return {
       avg: {
@@ -1395,7 +1398,7 @@ const KalorienTracker = () => {
         fat: Math.round(sums.fat / n),
         fiber: Math.round(sums.fiber / n),
         sport: Math.round(sums.sport / n),
-        net: Math.round(dayData.reduce((s, d) => s + d.net, 0) / dayData.length),
+        net: netDays.length ? Math.round(netDays.reduce((s, d) => s + d.net, 0) / netDays.length) : null,
         deficit: deficitDays.length ? Math.round(deficitSum / deficitDays.length) : null,
       },
       trackedDays: n,
@@ -2425,8 +2428,8 @@ ${trainingDays.filter(d => {
                       {/* Net calories average */}
                       <div className="bg-gradient-to-br from-slate-50 to-slate-100 border border-slate-200 rounded-xl p-4">
                         <p className="text-slate-600 text-xs font-semibold uppercase tracking-wide mb-1">Netto-Kalorien</p>
-                        <p className="text-2xl font-bold mono text-slate-800">{stats.avg.net}</p>
-                        <p className="text-xs text-slate-400 mt-1">Ø Essen − Sport</p>
+                        <p className="text-2xl font-bold mono text-slate-800">{stats.avg.net ?? '–'}</p>
+                        <p className="text-xs text-slate-400 mt-1">Ø Essen − Sport · ohne heute</p>
                       </div>
 
                       {/* Deficit – kumuliert über den Zeitraum */}
@@ -2447,7 +2450,7 @@ ${trainingDays.filter(d => {
                               {sum === null ? '–' : `${sum >= 0 ? '−' : '+'}${Math.abs(sum)}`}
                             </p>
                             <p className={`text-xs ${tone.text} opacity-70 mt-1`}>
-                              {sum === null ? 'TDEE n/a' : `Ø ${avgD >= 0 ? '−' : '+'}${Math.abs(avgD)}/Tag · Ziel ~200/Tag`}
+                              {sum === null ? 'TDEE n/a' : `Ø ${avgD >= 0 ? '−' : '+'}${Math.abs(avgD)}/Tag · Ziel ~200/Tag · ohne heute`}
                             </p>
                           </div>
                         );
@@ -2579,9 +2582,9 @@ ${trainingDays.filter(d => {
                     </div>
                   </div>
 
-                  {/* Deficit per day (TDEE ohne Sport − Netto-Kalorien) */}
+                  {/* Deficit per day (TDEE ohne Sport − Netto-Kalorien). Heute ausgeschlossen (unvollständiger Tag). */}
                   {(() => {
-                    const deficits = stats.dayData.filter(d => d.deficit !== null);
+                    const deficits = stats.dayData.filter(d => d.deficit !== null && d.date !== todayKey);
                     if (deficits.length === 0) return null;
                     const REFERENCE_DEFICIT = 200;
                     const maxD  = Math.max(...deficits.map(d => d.deficit), REFERENCE_DEFICIT, 0);
@@ -2613,7 +2616,25 @@ ${trainingDays.filter(d => {
                             style={{ bottom: `${zeroPct}%` }}
                           />
                           {stats.dayData.map((day) => {
-                            if (day.deficit === null) return <div key={day.date} className="flex-1" />;
+                            const isToday_ = day.date === todayKey;
+                            if (day.deficit === null || isToday_) {
+                              return (
+                                <div
+                                  key={day.date}
+                                  className="flex-1 relative cursor-pointer group"
+                                  style={{ height: '100%' }}
+                                  onClick={() => { setSelectedDate(day.date); setActiveTab('day'); }}
+                                  title={isToday_ ? 'Heute läuft noch · nicht in Ø/Σ enthalten' : undefined}
+                                >
+                                  {isToday_ && (
+                                    <div
+                                      className="absolute w-full border-t border-dashed border-slate-300"
+                                      style={{ bottom: `${zeroPct}%` }}
+                                    />
+                                  )}
+                                </div>
+                              );
+                            }
                             const isSel = day.date === selectedDate;
                             const barPct = (Math.abs(day.deficit) / range) * 100;
                             const isPositive = day.deficit >= 0;
