@@ -79,10 +79,6 @@ function estimateCalories(activity, weightKg = 75) {
   return Math.round(met * weightKg * (mins / 60));
 }
 
-// Strava-Kalorien (gemeldet wie geschätzt) sind im Schnitt zu hoch angesetzt.
-// Pauschale Korrektur von -25% auf alle Werte, bevor weitere Anteil-Regeln greifen.
-const STRAVA_DEFLATION = 0.75;
-
 function activityCategory(type) {
   const t = (type || '').toLowerCase();
   if (t.includes('weight') || t.includes('strength') || t.includes('crossfit')) return 'strength';
@@ -104,6 +100,17 @@ export default async (req) => {
         { status: 500 }
       );
     }
+
+    // Optionale Regel-Einstellungen aus dem Frontend (POST-Body), sonst Defaults
+    let rules = {};
+    if (req.method === 'POST') {
+      try { rules = await req.json(); } catch { rules = {}; }
+    }
+    const stravaDeflation   = (rules.stravaDeflation   ?? 25) / 100;
+    const walkHikeFactor    = (rules.walkHikeFactor    ?? 50) / 100;
+    const shortZone2Factor  = (rules.shortZone2Factor  ?? 75) / 100;
+    const shortZone2Min     = rules.shortZone2ThresholdMin ?? 90;
+    const useKjForPowerRides = rules.useKjForPowerRides ?? true;
 
     // ── 1. Get fresh Strava access token ──────────────────────────────────────
     const accessToken = await refreshAccessToken();
@@ -159,26 +166,26 @@ export default async (req) => {
       const isRide     = typeLow.includes('ride') || typeLow.includes('cycling') || typeLow.includes('virtual');
       const isRun      = typeLow.includes('run');
       const isVo2max   = /vo2|intervall|interval|hiit/i.test(nameLow);
-      // Kurze Zone-2-Einheiten (Rad/Lauf, kein VO2max, < 90 min) → 75%
-      // Alles ≥ 90 min oder VO2max → 100%
-      const isShortZone2 = (isRide || isRun) && !isVo2max && mins < 90;
+      // Kurze Zone-2-Einheiten (Rad/Lauf, kein VO2max, < Schwelle) → reduzierter Faktor
+      // Alles ≥ Schwelle oder VO2max → 100%
+      const isShortZone2 = (isRide || isRun) && !isVo2max && mins < shortZone2Min;
 
       let caloriesFactor = 1.0;
       let caloriesSource = reportedCal > 10 ? 'strava' : 'estimated';
       if (isWalkHike) {
-        caloriesFactor = 0.5;
-        caloriesSource = reportedCal > 10 ? 'strava_50pct' : 'estimated_50pct';
+        caloriesFactor = walkHikeFactor;
+        caloriesSource = reportedCal > 10 ? 'strava_walkhike' : 'estimated_walkhike';
       } else if (isShortZone2) {
-        caloriesFactor = 0.75;
-        caloriesSource = reportedCal > 10 ? 'strava_75pct' : 'estimated_75pct';
+        caloriesFactor = shortZone2Factor;
+        caloriesSource = reportedCal > 10 ? 'strava_shortzone2' : 'estimated_shortzone2';
       }
-      let calories = Math.round(rawCalories * caloriesFactor * STRAVA_DEFLATION);
+      let calories = Math.round(rawCalories * caloriesFactor * stravaDeflation);
 
       // Leistungsmesser-Check (Rad): kJ-Arbeit ist die zuverlässigste verfügbare Größe
-      // (Daumenregel 1 kJ ≈ 1 kcal). Nimm den niedrigeren Wert aus (-25%-korrigierter
+      // (Daumenregel 1 kJ ≈ 1 kcal). Nimm den niedrigeren Wert aus (korrigierter
       // Strava-Schätzung, kJ-Wert) – schützt zusätzlich vor Überschätzung bei Power-Rides.
       const kj = a.kilojoules || 0;
-      if (isRide && kj > 0) {
+      if (useKjForPowerRides && isRide && kj > 0) {
         const kjAsKcal = Math.round(kj);
         if (kjAsKcal < calories) {
           calories = kjAsKcal;

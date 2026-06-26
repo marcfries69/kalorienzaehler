@@ -23,7 +23,16 @@ export default async (req) => {
       macroGoals       = {},
       todayDate        = '',
       todayMeals       = [],
+      rules            = {},
     } = context;
+
+    const kcalRestBase    = rules.kcalRestBase    ?? 1800;
+    const minDaily         = rules.kcalMinDaily    ?? 1900;
+    const maintenanceBase = rules.maintenanceBase ?? 2100;
+    const stravaDeflation = rules.stravaDeflation ?? 25;
+    const macroRest  = rules.macroRest  ?? { protein: 150, carbs: 150, fat: 66 };
+    const macroTrain = rules.macroTrain ?? { protein: 150, carbs: 200, fat: 85 };
+    const macroCycle = rules.macroCycle ?? { protein: 150, carbs: 300, fat: 85 };
 
     const nutritionText = nutritionHistory.length > 0
       ? nutritionHistory.map(d => {
@@ -51,12 +60,12 @@ export default async (req) => {
 
     const macroText = [
       `Kalorienziel Ruhetag: ${calorieGoalRest} kcal`,
-      `Ruhetag: immer 1900 kcal | Trainingstag: Basis 1800 kcal + volle (-25% korrigierte) Strava-kcal, kein Eat-back-Abschlag, Tagesziel-Untergrenze 1900 kcal (keine Obergrenze)`,
-      `Strava-Kalorien werden pauschal um 25% nach unten korrigiert (Überschätzung) – dient nur der Genauigkeit, nicht dem Defizit`,
-      `Defizit = Erhaltungskalorien (2100 + Sport-kcal) − Tagesziel, bleibt dadurch konstant ~300 kcal (Ruhetag ~200 kcal)`,
-      `Makroziel Ruhetag/Gehen: Protein 150g | Carbs 150g | Fett 66g`,
-      `Makroziel Laufen/Kraft: Protein 150g | Carbs 200g | Fett 85g`,
-      `Makroziel Zone2 ≥90min / VO2max-Rad: Protein 150g | Carbs 300g | Fett 85g`,
+      `Ruhetag: immer ${minDaily} kcal | Trainingstag: Basis ${kcalRestBase} kcal + volle (-${stravaDeflation}% korrigierte) Strava-kcal, kein Eat-back-Abschlag, Tagesziel-Untergrenze ${minDaily} kcal (keine Obergrenze)`,
+      `Strava-Kalorien werden pauschal um ${stravaDeflation}% nach unten korrigiert (Überschätzung) – dient nur der Genauigkeit, nicht dem Defizit`,
+      `Defizit = Erhaltungskalorien (${maintenanceBase} + Sport-kcal) − Tagesziel, bleibt dadurch konstant ~${maintenanceBase - kcalRestBase} kcal (Ruhetag ~${maintenanceBase - minDaily} kcal)`,
+      `Makroziel Ruhetag/Gehen: Protein ${macroRest.protein}g | Carbs ${macroRest.carbs}g | Fett ${macroRest.fat}g`,
+      `Makroziel Laufen/Kraft: Protein ${macroTrain.protein}g | Carbs ${macroTrain.carbs}g | Fett ${macroTrain.fat}g`,
+      `Makroziel Zone2 ≥90min / VO2max-Rad: Protein ${macroCycle.protein}g | Carbs ${macroCycle.carbs}g | Fett ${macroCycle.fat}g`,
       macroGoals?.macroGoalsRestDay ? `(KI-Ziel Rest: P ${macroGoals.macroGoalsRestDay.proteinG}g | C ${macroGoals.macroGoalsRestDay.carbsG}g | F ${macroGoals.macroGoalsRestDay.fatG}g)` : '',
     ].filter(Boolean).join('\n');
 
