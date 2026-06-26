@@ -1385,6 +1385,7 @@ const KalorienTracker = () => {
 
     const maxKcal = Math.max(...dayData.map(d => Math.max(d.kcalDisplay || d.kcal, d.goal)), 1);
     const deficitDays = dayData.filter(d => d.deficit !== null);
+    const deficitSum  = deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0)) : null;
 
     return {
       avg: {
@@ -1395,7 +1396,7 @@ const KalorienTracker = () => {
         fiber: Math.round(sums.fiber / n),
         sport: Math.round(sums.sport / n),
         net: Math.round(dayData.reduce((s, d) => s + d.net, 0) / dayData.length),
-        deficit: deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0) / deficitDays.length) : null,
+        deficit: deficitDays.length ? Math.round(deficitSum / deficitDays.length) : null,
       },
       trackedDays: n,
       totalDays: days.length,
@@ -1403,6 +1404,8 @@ const KalorienTracker = () => {
       dayData,
       maxKcal,
       tdeeNoSport,
+      deficitSum,
+      deficitDaysCount: deficitDays.length,
     };
   };
 
@@ -2426,26 +2429,25 @@ ${trainingDays.filter(d => {
                         <p className="text-xs text-slate-400 mt-1">Ø Essen − Sport</p>
                       </div>
 
-                      {/* Deficit average */}
+                      {/* Deficit – kumuliert über den Zeitraum */}
                       {(() => {
-                        const d = stats.avg.deficit;
-                        const tone = d === null
+                        const sum = stats.deficitSum;
+                        const avgD = stats.avg.deficit;
+                        const tone = sum === null
                           ? { bg: 'from-slate-50 to-slate-100', border: 'border-slate-200', text: 'text-slate-600', num: 'text-slate-800' }
-                          : d >= 200
+                          : sum >= 0
                             ? { bg: 'from-emerald-50 to-teal-50', border: 'border-emerald-200', text: 'text-emerald-600', num: 'text-emerald-900' }
-                            : d > 0
-                              ? { bg: 'from-amber-50 to-orange-50', border: 'border-amber-200', text: 'text-amber-600', num: 'text-amber-900' }
-                              : { bg: 'from-rose-50 to-red-50', border: 'border-rose-200', text: 'text-rose-600', num: 'text-rose-900' };
+                            : { bg: 'from-rose-50 to-red-50', border: 'border-rose-200', text: 'text-rose-600', num: 'text-rose-900' };
                         return (
                           <div className={`bg-gradient-to-br ${tone.bg} border ${tone.border} rounded-xl p-4`}>
                             <p className={`${tone.text} text-xs font-semibold uppercase tracking-wide mb-1`}>
-                              {d === null ? 'Defizit' : d >= 0 ? 'Defizit' : 'Überschuss'}
+                              {sum === null ? 'Defizit' : sum >= 0 ? 'Defizit (Zeitraum)' : 'Überschuss (Zeitraum)'}
                             </p>
                             <p className={`text-2xl font-bold mono ${tone.num}`}>
-                              {d === null ? '–' : `${d >= 0 ? '−' : '+'}${Math.abs(d)}`}
+                              {sum === null ? '–' : `${sum >= 0 ? '−' : '+'}${Math.abs(sum)}`}
                             </p>
                             <p className={`text-xs ${tone.text} opacity-70 mt-1`}>
-                              {d === null ? 'TDEE n/a' : `Ø/Tag · Ziel ~200 kcal`}
+                              {sum === null ? 'TDEE n/a' : `Ø ${avgD >= 0 ? '−' : '+'}${Math.abs(avgD)}/Tag · Ziel ~200/Tag`}
                             </p>
                           </div>
                         );
@@ -2588,14 +2590,15 @@ ${trainingDays.filter(d => {
                     const zeroPct = ((0 - minD) / range) * 100;
                     const refPct  = ((REFERENCE_DEFICIT - minD) / range) * 100;
                     const avgD    = stats.avg.deficit;
+                    const sumD    = stats.deficitSum;
                     return (
                       <div className="glass rounded-3xl p-6 shadow-xl mt-3">
                         <div className="flex items-center justify-between mb-1">
                           <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                             <Flame className="w-4 h-4 text-rose-500" /> Defizit pro Tag
                           </h3>
-                          <span className="text-xs text-slate-400">
-                            Ø {avgD !== null ? `${avgD >= 0 ? '−' : '+'}${Math.abs(avgD)}` : '–'} kcal
+                          <span className="text-xs text-slate-400 text-right">
+                            Σ {sumD !== null ? `${sumD >= 0 ? '−' : '+'}${Math.abs(sumD)}` : '–'} kcal · Ø {avgD !== null ? `${avgD >= 0 ? '−' : '+'}${Math.abs(avgD)}` : '–'}/Tag
                           </span>
                         </div>
                         <p className="text-xs text-slate-400 mb-4">TDEE ohne Sport − Netto-Kalorien (Essen − Sport) · gestrichelt = Ziel 200 kcal</p>
