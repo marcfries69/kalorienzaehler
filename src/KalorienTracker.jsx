@@ -3164,7 +3164,7 @@ ${trainingDays.filter(d => {
                 const minV = Math.min(...allVals) - pad;
                 const maxV = Math.max(...allVals) + pad;
                 const range = (maxV - minV) || 1;
-                const W = 600, H = 190, padX = 28, padY = 28;
+                const W = 600, H = 200, padX = 28, padY = 32;
                 const plotW = W - padX * 2, plotH = H - padY * 2;
                 const xFor = (i) => padX + (data.length > 1 ? (i / (data.length - 1)) * plotW : plotW / 2);
                 const yFor = (v) => padY + plotH - ((v - minV) / range) * plotH;
@@ -3210,7 +3210,7 @@ ${trainingDays.filter(d => {
                         </button>
                       ))}
                     </div>
-                    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '190px' }}>
+                    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '200px' }}>
                       {goalY != null && (
                         <>
                           <line x1={padX} y1={goalY} x2={W - padX} y2={goalY} stroke="#10b981" strokeDasharray="4 4" strokeWidth="1" />
@@ -3225,14 +3225,14 @@ ${trainingDays.filter(d => {
                         const v = d[metric.key];
                         if (v == null) return null;
                         const cy = yFor(v);
-                        const above = cy > padY + 10; // bei Bedarf unter den Punkt ausweichen
+                        const above = cy > padY + 14; // bei Bedarf unter den Punkt ausweichen
                         return (
                           <text
                             key={`v${i}`}
                             x={xFor(i)}
-                            y={above ? cy - 6 : cy + 12}
+                            y={above ? cy - 8 : cy + 16}
                             textAnchor="middle"
-                            fontSize="8"
+                            fontSize="12"
                             fontWeight="700"
                             fill={metric.color}
                           >
