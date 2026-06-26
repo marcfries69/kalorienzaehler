@@ -99,6 +99,7 @@ const KalorienTracker = () => {
   const [bodyScreenshotPreview, setBodyScreenshotPreview] = useState(null);
   const [loadingBody, setLoadingBody] = useState(false);
   const [showBodyHistory, setShowBodyHistory] = useState(false);
+  const [bodyChartRange, setBodyChartRange] = useState('weeks'); // 'weeks' | 'months'
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [chatMessages, setChatMessages] = useState([]); // {role:'user'|'assistant', content:string}
@@ -1280,6 +1281,28 @@ const KalorienTracker = () => {
       d.setDate(d.getDate() + offset * 7 - (6 - i));
       return toDateKey(d);
     });
+
+  // Aggregiert Körpermessungen je Woche/Monat (jüngste Messung pro Bucket gewinnt),
+  // für den Gewichtsverlauf-Chart im Coach-Tab.
+  const getBodyTrend = (granularity) => {
+    if (bodyMeasurements.length === 0) return [];
+    const sorted = [...bodyMeasurements].sort((a, b) => a.date.localeCompare(b.date));
+    const bucketKey = (dateStr) => {
+      const d = new Date(dateStr + 'T12:00:00');
+      if (granularity === 'weeks') {
+        const dow = d.getDay() || 7; // Sonntag(0) -> 7
+        const monday = new Date(d);
+        monday.setDate(d.getDate() - dow + 1);
+        return toDateKey(monday);
+      }
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    };
+    const buckets = {};
+    sorted.forEach(m => { buckets[bucketKey(m.date)] = m; });
+    const keys = Object.keys(buckets).sort();
+    const numBuckets = granularity === 'weeks' ? 12 : 9;
+    return keys.slice(-numBuckets).map(k => buckets[k]);
+  };
 
   // offset: 0 = aktueller Monat, -1 = Vormonat, -2 = vorletzter Monat, ...
   const getMonthDays = (offset = 0) => {
@@ -3003,6 +3026,77 @@ ${trainingDays.filter(d => {
                   <Target className="w-4 h-4" /> Zielwerte
                 </button>
               </div>
+
+              {/* ── Gewichtsverlauf-Chart ── */}
+              {bodyMeasurements.length > 1 && (() => {
+                const data = getBodyTrend(bodyChartRange);
+                const weights = data.map(d => d.weight).filter(w => w != null);
+                if (weights.length < 2) return null;
+
+                const goalWeight = bodyGoals.weight;
+                const allVals = goalWeight ? [...weights, goalWeight] : weights;
+                const minW = Math.min(...allVals) - 0.5;
+                const maxW = Math.max(...allVals) + 0.5;
+                const range = (maxW - minW) || 1;
+                const W = 600, H = 180, padX = 28, padY = 18;
+                const plotW = W - padX * 2, plotH = H - padY * 2;
+                const xFor = (i) => padX + (data.length > 1 ? (i / (data.length - 1)) * plotW : plotW / 2);
+                const yFor = (w) => padY + plotH - ((w - minW) / range) * plotH;
+                const points = data
+                  .map((d, i) => (d.weight != null ? `${xFor(i)},${yFor(d.weight)}` : null))
+                  .filter(Boolean)
+                  .join(' ');
+                const goalY = goalWeight ? yFor(goalWeight) : null;
+                const labelStride = Math.max(1, Math.ceil(data.length / 6));
+
+                return (
+                  <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+                        <Scale className="w-4 h-4 text-blue-600" /> Gewichtsverlauf
+                      </h3>
+                      <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5">
+                        {[{ key: 'weeks', label: 'Wochen' }, { key: 'months', label: 'Monate' }].map(r => (
+                          <button
+                            key={r.key}
+                            onClick={() => setBodyChartRange(r.key)}
+                            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                              bodyChartRange === r.key ? 'bg-white shadow text-blue-700' : 'text-slate-500'
+                            }`}
+                          >
+                            {r.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '180px' }}>
+                      {goalY != null && (
+                        <>
+                          <line x1={padX} y1={goalY} x2={W - padX} y2={goalY} stroke="#10b981" strokeDasharray="4 4" strokeWidth="1" />
+                          <text x={W - padX} y={goalY - 4} textAnchor="end" fontSize="9" fill="#10b981">Ziel {goalWeight}kg</text>
+                        </>
+                      )}
+                      <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="2" />
+                      {data.map((d, i) => d.weight != null && (
+                        <circle key={i} cx={xFor(i)} cy={yFor(d.weight)} r="3" fill="#3b82f6" />
+                      ))}
+                      {data.map((d, i) => (
+                        (i === 0 || i === data.length - 1 || i % labelStride === 0) && (
+                          <text key={`l${i}`} x={xFor(i)} y={H - 4} textAnchor="middle" fontSize="9" fill="#94a3b8">
+                            {bodyChartRange === 'weeks'
+                              ? new Date(d.date + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })
+                              : new Date(d.date + 'T12:00:00').toLocaleDateString('de-DE', { month: 'short' })}
+                          </text>
+                        )
+                      ))}
+                    </svg>
+                    <div className="flex justify-between mt-1 text-xs text-slate-400">
+                      <span>{weights[0]} kg</span>
+                      <span className="font-semibold text-slate-600">{weights[weights.length - 1]} kg aktuell</span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* ── KI-Intelligenz ── */}
               <div className="glass rounded-3xl p-5 mb-4 shadow-xl border border-violet-100">
