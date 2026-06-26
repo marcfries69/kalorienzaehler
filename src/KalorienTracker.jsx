@@ -2,10 +2,19 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
-  Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind
+  Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind,
+  Cloud, CloudOff,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { createClient } from '@supabase/supabase-js';
+
+// Blood Analytics Supabase project — public anon key, read/write of this user's
+// own nutrition_log rows only (same key already used in netlify/functions/sync-body.mjs).
+const SUPABASE_URL = 'https://fwsunbqvkvudmgjkjsbh.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3c3VuYnF2a3Z1ZG1namtqc2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1ODY0OTEsImV4cCI6MjA4NzE2MjQ5MX0.5bZOef0bZL4U4eAwthM3JZas_AsjDWgsJwKWjO-RB3I';
+const NUTRITION_USER_ID = 'cff2bc0d-5205-4a90-8df9-463afe2065d8';
+const sbClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const toDateKey = (d) => {
   const date = d instanceof Date ? d : new Date(d);
@@ -134,6 +143,8 @@ const KalorienTracker = () => {
   const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [syncError, setSyncError] = useState(null);
   const [trainingSyncError, setTrainingSyncError] = useState(null);
+  const [lastNutritionSyncAt, setLastNutritionSyncAt] = useState(() => localStorage.getItem('supabase-last-full-sync') || '');
+  const [nutritionSyncStatus, setNutritionSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [trainingDays, setTrainingDays] = useState(() => {
     try { return JSON.parse(localStorage.getItem('training-days') || '[]'); } catch { return []; }
   });
@@ -457,12 +468,103 @@ const KalorienTracker = () => {
 
       const savedCalcData = localStorage.getItem('calculator-data');
       if (savedCalcData) setCalculatorData(JSON.parse(savedCalcData));
+
+      // ── Nutrition auto-sync (once per day) ──────────────────────────────────
+      const lastNutrSync = localStorage.getItem('supabase-last-full-sync');
+      const todayStr = toDateKey(new Date());
+      if (!lastNutrSync || lastNutrSync !== todayStr) {
+        // fire-and-forget in background
+        (async () => {
+          try {
+            const wh   = savedWater ? JSON.parse(savedWater) : {};
+            const goal = savedGoal ? (parseInt(savedGoal) || 1800) : 1800;
+            const rows = Object.entries(hist).filter(([, m]) => m && m.length > 0).map(([dk, meals]) => {
+              const t = meals.reduce((acc, m) => ({
+                kcal: acc.kcal+(m.kcal||0), protein: acc.protein+(m.protein||0),
+                carbs: acc.carbs+(m.carbs||0), fat: acc.fat+(m.fat||0), fiber: acc.fiber+(m.fiber||0),
+              }), { kcal:0, protein:0, carbs:0, fat:0, fiber:0 });
+              return {
+                user_id: NUTRITION_USER_ID, date: dk,
+                total_kcal: Math.round(t.kcal), protein_g: Math.round(t.protein*10)/10,
+                carbs_g: Math.round(t.carbs*10)/10, fat_g: Math.round(t.fat*10)/10,
+                fiber_g: Math.round(t.fiber*10)/10, water_ml: wh[dk]||0,
+                kcal_goal: goal,
+                meals: meals.map(m => ({ name: m.name||m.text, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber })),
+                updated_at: new Date().toISOString(),
+              };
+            });
+            for (let i = 0; i < rows.length; i += 50) {
+              await sbClient.from('nutrition_log').upsert(rows.slice(i, i+50), { onConflict: 'user_id,date' });
+            }
+            localStorage.setItem('supabase-last-full-sync', todayStr);
+            console.log(`[NutrSync] Auto sync on load: ${rows.length} days`);
+          } catch (e) { console.warn('[NutrSync] Auto sync error:', e.message); }
+        })();
+      }
     } catch (e) {
       console.error('Ladefehler:', e);
     } finally {
       setLoadingInitial(false);
     }
   }, []);
+
+  // ── Nutrition sync helpers ────────────────────────────────────────────────
+  // Per-day sync: called after every saveHistory / saveWater
+  const syncNutritionDayToSupabase = async (dateKey, meals, waterMl, goal) => {
+    if (!meals || meals.length === 0) return;
+    try {
+      const totals = meals.reduce((acc, m) => ({
+        kcal: acc.kcal + (m.kcal || 0), protein: acc.protein + (m.protein || 0),
+        carbs: acc.carbs + (m.carbs || 0), fat: acc.fat + (m.fat || 0), fiber: acc.fiber + (m.fiber || 0),
+      }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+      await sbClient.from('nutrition_log').upsert({
+        user_id: NUTRITION_USER_ID, date: dateKey,
+        total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
+        carbs_g: Math.round(totals.carbs * 10) / 10, fat_g: Math.round(totals.fat * 10) / 10,
+        fiber_g: Math.round(totals.fiber * 10) / 10, water_ml: waterMl || 0,
+        kcal_goal: goal,
+        meals: meals.map(m => ({ name: m.name || m.text, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber })),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id,date' });
+    } catch (e) { console.warn('[NutrSync] Day sync error:', e.message); }
+  };
+
+  // Full sync (all days) — called on demand
+  const manualNutritionSync = async () => {
+    setNutritionSyncStatus('syncing');
+    try {
+      const hist = JSON.parse(localStorage.getItem('history-data') || '{}');
+      const wh   = JSON.parse(localStorage.getItem('water-history') || '{}');
+      const goal = parseInt(localStorage.getItem('calorie-goal') || '1800');
+      const rows = Object.entries(hist).filter(([, m]) => m && m.length > 0).map(([dk, meals]) => {
+        const t = meals.reduce((acc, m) => ({
+          kcal: acc.kcal + (m.kcal||0), protein: acc.protein + (m.protein||0),
+          carbs: acc.carbs + (m.carbs||0), fat: acc.fat + (m.fat||0), fiber: acc.fiber + (m.fiber||0),
+        }), { kcal:0, protein:0, carbs:0, fat:0, fiber:0 });
+        return {
+          user_id: NUTRITION_USER_ID, date: dk,
+          total_kcal: Math.round(t.kcal), protein_g: Math.round(t.protein*10)/10,
+          carbs_g: Math.round(t.carbs*10)/10, fat_g: Math.round(t.fat*10)/10,
+          fiber_g: Math.round(t.fiber*10)/10, water_ml: wh[dk]||0,
+          kcal_goal: goal,
+          meals: meals.map(m => ({ name: m.name||m.text, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber })),
+          updated_at: new Date().toISOString(),
+        };
+      });
+      for (let i = 0; i < rows.length; i += 50) {
+        await sbClient.from('nutrition_log').upsert(rows.slice(i, i+50), { onConflict: 'user_id,date' });
+      }
+      const today = toDateKey(new Date());
+      localStorage.setItem('supabase-last-full-sync', today);
+      setLastNutritionSyncAt(today);
+      setNutritionSyncStatus('ok');
+      console.log(`[NutrSync] Full sync: ${rows.length} days uploaded`);
+    } catch (e) {
+      console.warn('[NutrSync] Full sync error:', e.message);
+      setNutritionSyncStatus('error');
+    }
+    setTimeout(() => setNutritionSyncStatus(null), 3000);
+  };
 
   // ── Body sync ────────────────────────────────────────────────────────────────
   const syncBodyData = async (silent = false) => {
@@ -733,11 +835,18 @@ const KalorienTracker = () => {
     }
     setHistory(cleaned);
     localStorage.setItem('history-data', JSON.stringify(cleaned));
+    // Auto-sync today's entry to Supabase (best-effort, no await)
+    const meals = cleaned[selectedDate] || [];
+    const water = waterHistory[selectedDate] || 0;
+    syncNutritionDayToSupabase(selectedDate, meals, water, calorieGoal);
   };
 
   const saveWater = (newWaterHistory) => {
     setWaterHistory(newWaterHistory);
     localStorage.setItem('water-history', JSON.stringify(newWaterHistory));
+    // Auto-sync water update for the current day
+    const meals = history[selectedDate] || [];
+    syncNutritionDayToSupabase(selectedDate, meals, newWaterHistory[selectedDate] || 0, calorieGoal);
   };
 
   const saveCalorieGoal = (goal) => {
@@ -1572,7 +1681,25 @@ ${trainingDays.filter(d => {
               <Settings className="w-4 h-4" />
               Regeln
             </button>
+            <button
+              onClick={manualNutritionSync}
+              disabled={nutritionSyncStatus === 'syncing'}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2 disabled:opacity-50"
+              title="Ernährungsdaten zu Blood Analytics synchronisieren"
+            >
+              {nutritionSyncStatus === 'syncing' ? <Loader2 className="w-4 h-4 animate-spin" />
+               : nutritionSyncStatus === 'ok' ? <Check className="w-4 h-4" />
+               : nutritionSyncStatus === 'error' ? <CloudOff className="w-4 h-4" />
+               : <Cloud className="w-4 h-4" />}
+              {nutritionSyncStatus === 'syncing' ? 'Sync…'
+               : nutritionSyncStatus === 'ok' ? 'Gesynct!'
+               : nutritionSyncStatus === 'error' ? 'Sync-Fehler'
+               : 'Blood Analytics Sync'}
+            </button>
           </div>
+          {lastNutritionSyncAt && !nutritionSyncStatus && (
+            <p className="text-slate-400 text-xs mt-2">Letzter Sync: {lastNutritionSyncAt}</p>
+          )}
         </div>
 
         {/* ── Tab bar ── */}
