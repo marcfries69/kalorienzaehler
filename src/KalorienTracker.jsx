@@ -31,13 +31,17 @@ const toDateKey = (d) => {
 const PHOTO_DB_NAME  = 'kalorienzaehler-photos';
 const PHOTO_DB_STORE = 'photos';
 
+// Schema v2: ein Eintrag = eine Upload-Session (kann mehrere Bilder enthalten,
+// z.B. Front-/Seiten-/Rückansicht vom selben Tag). keyPath "id" statt "date",
+// da an einem Tag auch mehrere Sessions möglich sind.
 const openPhotoDB = () => new Promise((resolve, reject) => {
-  const req = indexedDB.open(PHOTO_DB_NAME, 1);
-  req.onupgradeneeded = () => {
+  const req = indexedDB.open(PHOTO_DB_NAME, 2);
+  req.onupgradeneeded = (e) => {
     const db = req.result;
-    if (!db.objectStoreNames.contains(PHOTO_DB_STORE)) {
-      db.createObjectStore(PHOTO_DB_STORE, { keyPath: 'date' });
+    if (db.objectStoreNames.contains(PHOTO_DB_STORE)) {
+      db.deleteObjectStore(PHOTO_DB_STORE); // altes Schema (keyPath "date") verwerfen
     }
+    db.createObjectStore(PHOTO_DB_STORE, { keyPath: 'id' });
   };
   req.onsuccess = () => resolve(req.result);
   req.onerror   = () => reject(req.error);
@@ -58,16 +62,16 @@ const getAllPhotoRecords = async () => {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(PHOTO_DB_STORE, 'readonly');
     const req = tx.objectStore(PHOTO_DB_STORE).getAll();
-    req.onsuccess = () => resolve((req.result || []).sort((a, b) => a.date.localeCompare(b.date)));
+    req.onsuccess = () => resolve((req.result || []).sort((a, b) => a.id.localeCompare(b.id)));
     req.onerror   = () => reject(req.error);
   });
 };
 
-const deletePhotoRecord = async (date) => {
+const deletePhotoRecord = async (id) => {
   const db = await openPhotoDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(PHOTO_DB_STORE, 'readwrite');
-    tx.objectStore(PHOTO_DB_STORE).delete(date);
+    tx.objectStore(PHOTO_DB_STORE).delete(id);
     tx.oncomplete = () => resolve();
     tx.onerror    = () => reject(tx.error);
   });
@@ -209,6 +213,7 @@ const KalorienTracker = () => {
   const [photoAnalysisError, setPhotoAnalysisError] = useState(null);
   const [viewingPhoto, setViewingPhoto] = useState(null); // record zum Vergrößert-Anzeigen
   const photoFileRef = useRef(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [showPdfMenu, setShowPdfMenu] = useState(false);
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
@@ -635,22 +640,30 @@ const KalorienTracker = () => {
   }, []);
 
   // ── Körperfoto-Analyse ───────────────────────────────────────────────────────
-  const analyzeBodyPhoto = async (file) => {
+  // Akzeptiert mehrere Dateien (Drag&Drop oder Mehrfachauswahl) als EINE Session
+  // (z.B. Front-/Seiten-/Rückansicht vom selben Tag) – die KI bewertet alle
+  // Bilder zusammen für eine genauere Einschätzung statt mehrfach einzeln.
+  const analyzeBodyPhotos = async (files) => {
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (imageFiles.length === 0) return;
+
     setLoadingPhotoAnalysis(true);
     setPhotoAnalysisError(null);
     try {
-      const image = await compressImage(file);
-      const date  = toDateKey(new Date());
+      const images = await Promise.all(imageFiles.map(f => compressImage(f)));
+      const date = toDateKey(new Date());
+      const id   = `${date}_${Date.now()}`;
 
-      // Referenzfotos: erstes (Baseline) + letztes (vor diesem Upload), falls vorhanden
+      // Referenzfotos: erstes (Baseline) + letzte Session (vor diesem Upload), falls vorhanden
+      // Pro Referenz-Session wird nur das erste Bild mitgeschickt (Prompt-/Kostengröße begrenzen).
       const existing = await getAllPhotoRecords();
       const referencePhotos = [];
       if (existing.length > 0) {
         const first = existing[0];
         const last  = existing[existing.length - 1];
-        referencePhotos.push({ date: first.date, image: first.image, label: 'erstes Foto' });
-        if (last.date !== first.date) {
-          referencePhotos.push({ date: last.date, image: last.image, label: 'letztes Foto' });
+        referencePhotos.push({ date: first.date, image: first.images[0], label: 'erstes Foto' });
+        if (last.id !== first.id) {
+          referencePhotos.push({ date: last.date, image: last.images[0], label: 'letztes Foto' });
         }
       }
 
@@ -663,12 +676,12 @@ const KalorienTracker = () => {
       const res = await fetch('/.netlify/functions/analyze-body-photo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newPhoto: { date, image }, referencePhotos, scaleData }),
+        body: JSON.stringify({ newPhotos: images.map(image => ({ date, image })), referencePhotos, scaleData }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Foto-Analyse fehlgeschlagen');
 
-      const record = { date, image, assessment: json };
+      const record = { id, date, images, assessment: json };
       await savePhotoRecord(record);
       setBodyPhotos(await getAllPhotoRecords());
     } catch (err) {
@@ -678,8 +691,8 @@ const KalorienTracker = () => {
     }
   };
 
-  const removeBodyPhoto = async (date) => {
-    await deletePhotoRecord(date);
+  const removeBodyPhoto = async (id) => {
+    await deletePhotoRecord(id);
     setBodyPhotos(await getAllPhotoRecords());
   };
 
@@ -3391,7 +3404,16 @@ ${trainingDays.filter(d => {
               })()}
 
               {/* ── Körper-Fotos (KI-Analyse) ── */}
-              <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+              <div
+                className={`glass rounded-3xl p-5 mb-4 shadow-xl transition-colors ${isDraggingPhoto ? 'ring-2 ring-pink-400 bg-pink-50/40' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setIsDraggingPhoto(true); }}
+                onDragLeave={() => setIsDraggingPhoto(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingPhoto(false);
+                  if (e.dataTransfer.files?.length) analyzeBodyPhotos(e.dataTransfer.files);
+                }}
+              >
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
                     <Camera className="w-4 h-4 text-pink-600" /> Foto-Verlauf
@@ -3400,10 +3422,10 @@ ${trainingDays.filter(d => {
                     ref={photoFileRef}
                     type="file"
                     accept="image/*"
+                    multiple
                     className="hidden"
                     onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) analyzeBodyPhoto(file);
+                      if (e.target.files?.length) analyzeBodyPhotos(e.target.files);
                       e.target.value = '';
                     }}
                   />
@@ -3414,15 +3436,16 @@ ${trainingDays.filter(d => {
                   >
                     {loadingPhotoAnalysis
                       ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analysiere…</>
-                      : <><ImagePlus className="w-3.5 h-3.5" /> Foto hochladen</>
+                      : <><ImagePlus className="w-3.5 h-3.5" /> Foto(s) hochladen</>
                     }
                   </button>
                 </div>
 
                 {bodyPhotos.length === 0 && !loadingPhotoAnalysis && (
                   <p className="text-xs text-slate-400 mb-2">
-                    Die Waage zeigt nicht immer die Wahrheit. Lade ein Foto hoch — die KI schätzt KFA & Co.
-                    unabhängig davon rein visuell und erkennt mit jedem weiteren Foto Fortschritt oder Rückschritt.
+                    Die Waage zeigt nicht immer die Wahrheit. Lade ein oder mehrere Fotos hoch (auch per Drag & Drop) —
+                    die KI schätzt KFA & Co. unabhängig davon rein visuell und erkennt mit jedem weiteren Upload
+                    Fortschritt oder Rückschritt.
                   </p>
                 )}
 
@@ -3459,21 +3482,29 @@ ${trainingDays.filter(d => {
                           ))}
                         </ul>
                       )}
-                      <p className="text-xs text-slate-400 mt-2">Foto vom {new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</p>
+                      <p className="text-xs text-slate-400 mt-2">
+                        {latest.images.length > 1 ? `${latest.images.length} Fotos vom` : 'Foto vom'}{' '}
+                        {new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}
+                      </p>
                     </div>
                   );
                 })()}
 
-                {/* Thumbnail-Verlauf */}
+                {/* Thumbnail-Verlauf (eine Kachel pro Session) */}
                 {bodyPhotos.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto pb-1">
                     {[...bodyPhotos].reverse().map((p) => (
                       <button
-                        key={p.date}
+                        key={p.id}
                         onClick={() => setViewingPhoto(p)}
-                        className="flex-shrink-0 w-16 text-center"
+                        className="flex-shrink-0 w-16 text-center relative"
                       >
-                        <img src={p.image} alt={p.date} className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
+                        <img src={p.images[0]} alt={p.date} className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
+                        {p.images.length > 1 && (
+                          <span className="absolute top-0.5 right-0.5 bg-slate-800/80 text-white text-[9px] rounded-full px-1.5 py-0.5">
+                            +{p.images.length - 1}
+                          </span>
+                        )}
                         <span className="text-[10px] text-slate-400 mt-0.5 block">
                           {new Date(p.date + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
                         </span>
@@ -3487,14 +3518,23 @@ ${trainingDays.filter(d => {
               {viewingPhoto && (
                 <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setViewingPhoto(null)}>
                   <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                    <img src={viewingPhoto.image} alt={viewingPhoto.date} className="w-full max-h-[50vh] object-contain bg-slate-100" />
+                    {viewingPhoto.images.length > 1 ? (
+                      <div className="flex gap-1 overflow-x-auto bg-slate-100">
+                        {viewingPhoto.images.map((img, i) => (
+                          <img key={i} src={img} alt={`${viewingPhoto.date}-${i}`} className="h-56 flex-shrink-0 object-contain bg-slate-100" />
+                        ))}
+                      </div>
+                    ) : (
+                      <img src={viewingPhoto.images[0]} alt={viewingPhoto.date} className="w-full max-h-[50vh] object-contain bg-slate-100" />
+                    )}
                     <div className="p-4 space-y-2">
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-bold text-slate-700">
                           {new Date(viewingPhoto.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' })}
+                          {viewingPhoto.images.length > 1 && <span className="text-slate-400 font-normal"> · {viewingPhoto.images.length} Fotos</span>}
                         </p>
                         <button
-                          onClick={async () => { await removeBodyPhoto(viewingPhoto.date); setViewingPhoto(null); }}
+                          onClick={async () => { await removeBodyPhoto(viewingPhoto.id); setViewingPhoto(null); }}
                           className="text-xs text-rose-500 hover:underline"
                         >
                           Löschen
