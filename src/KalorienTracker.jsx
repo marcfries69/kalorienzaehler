@@ -3,7 +3,7 @@ import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
   Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind,
-  Cloud, CloudOff,
+  Cloud, CloudOff, Camera, ImagePlus,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -23,6 +23,79 @@ const toDateKey = (d) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+// ── Körper-Fotos: lokale Speicherung via IndexedDB ────────────────────────────
+// Fotos sind sensible Daten – bewusst NICHT in einer Cloud-Datenbank abgelegt,
+// sondern nur lokal im Browser. Die KI-Analyse bekommt die Bilder nur zur
+// einmaligen, nicht-persistenten Auswertung übermittelt.
+const PHOTO_DB_NAME  = 'kalorienzaehler-photos';
+const PHOTO_DB_STORE = 'photos';
+
+const openPhotoDB = () => new Promise((resolve, reject) => {
+  const req = indexedDB.open(PHOTO_DB_NAME, 1);
+  req.onupgradeneeded = () => {
+    const db = req.result;
+    if (!db.objectStoreNames.contains(PHOTO_DB_STORE)) {
+      db.createObjectStore(PHOTO_DB_STORE, { keyPath: 'date' });
+    }
+  };
+  req.onsuccess = () => resolve(req.result);
+  req.onerror   = () => reject(req.error);
+});
+
+const savePhotoRecord = async (record) => {
+  const db = await openPhotoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_DB_STORE, 'readwrite');
+    tx.objectStore(PHOTO_DB_STORE).put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+  });
+};
+
+const getAllPhotoRecords = async () => {
+  const db = await openPhotoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_DB_STORE, 'readonly');
+    const req = tx.objectStore(PHOTO_DB_STORE).getAll();
+    req.onsuccess = () => resolve((req.result || []).sort((a, b) => a.date.localeCompare(b.date)));
+    req.onerror   = () => reject(req.error);
+  });
+};
+
+const deletePhotoRecord = async (date) => {
+  const db = await openPhotoDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_DB_STORE, 'readwrite');
+    tx.objectStore(PHOTO_DB_STORE).delete(date);
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
+  });
+};
+
+// Verkleinert + komprimiert ein hochgeladenes Bild (max. 1024px, JPEG ~75%),
+// damit IndexedDB-Speicher und Vision-API-Payload klein bleiben.
+const compressImage = (file, maxDim = 1024, quality = 0.75) => new Promise((resolve, reject) => {
+  const img = new Image();
+  const reader = new FileReader();
+  reader.onload = () => { img.src = reader.result; };
+  reader.onerror = reject;
+  img.onload = () => {
+    let { width, height } = img;
+    if (width > maxDim || height > maxDim) {
+      const scale = maxDim / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+    resolve(canvas.toDataURL('image/jpeg', quality));
+  };
+  img.onerror = reject;
+  reader.readAsDataURL(file);
+});
 
 // ── Konfigurierbare Regeln (Einstellungen) ────────────────────────────────────
 // Alle Zahlen, die bisher über die Konversation hartkodiert wurden, leben jetzt hier als
@@ -129,6 +202,13 @@ const KalorienTracker = () => {
   const [showBodyHistory, setShowBodyHistory] = useState(false);
   const [bodyChartRange, setBodyChartRange] = useState('weeks'); // 'weeks' | 'months'
   const [bodyChartMetric, setBodyChartMetric] = useState('weight'); // weight | fatPct | visceralFat | musclePct
+
+  // ── Körper-Fotos (KI-Analyse) ─────────────────────────────────────────────────
+  const [bodyPhotos, setBodyPhotos] = useState([]); // [{date, image, assessment}], aus IndexedDB
+  const [loadingPhotoAnalysis, setLoadingPhotoAnalysis] = useState(false);
+  const [photoAnalysisError, setPhotoAnalysisError] = useState(null);
+  const [viewingPhoto, setViewingPhoto] = useState(null); // record zum Vergrößert-Anzeigen
+  const photoFileRef = useRef(null);
   const [showPdfMenu, setShowPdfMenu] = useState(false);
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
@@ -549,7 +629,59 @@ const KalorienTracker = () => {
     } finally {
       setLoadingInitial(false);
     }
+
+    // Körper-Fotos aus IndexedDB laden (lokal, nicht in localStorage wg. Größe)
+    getAllPhotoRecords().then(setBodyPhotos).catch((e) => console.warn('Foto-Verlauf laden fehlgeschlagen:', e.message));
   }, []);
+
+  // ── Körperfoto-Analyse ───────────────────────────────────────────────────────
+  const analyzeBodyPhoto = async (file) => {
+    setLoadingPhotoAnalysis(true);
+    setPhotoAnalysisError(null);
+    try {
+      const image = await compressImage(file);
+      const date  = toDateKey(new Date());
+
+      // Referenzfotos: erstes (Baseline) + letztes (vor diesem Upload), falls vorhanden
+      const existing = await getAllPhotoRecords();
+      const referencePhotos = [];
+      if (existing.length > 0) {
+        const first = existing[0];
+        const last  = existing[existing.length - 1];
+        referencePhotos.push({ date: first.date, image: first.image, label: 'erstes Foto' });
+        if (last.date !== first.date) {
+          referencePhotos.push({ date: last.date, image: last.image, label: 'letztes Foto' });
+        }
+      }
+
+      const latestMeasurement = bodyMeasurements[bodyMeasurements.length - 1] || null;
+      const scaleData = latestMeasurement ? {
+        weight: latestMeasurement.weight, fatPct: latestMeasurement.fatPct,
+        musclePct: latestMeasurement.musclePct, visceralFat: latestMeasurement.visceralFat,
+      } : null;
+
+      const res = await fetch('/.netlify/functions/analyze-body-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPhoto: { date, image }, referencePhotos, scaleData }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Foto-Analyse fehlgeschlagen');
+
+      const record = { date, image, assessment: json };
+      await savePhotoRecord(record);
+      setBodyPhotos(await getAllPhotoRecords());
+    } catch (err) {
+      setPhotoAnalysisError(err.message);
+    } finally {
+      setLoadingPhotoAnalysis(false);
+    }
+  };
+
+  const removeBodyPhoto = async (date) => {
+    await deletePhotoRecord(date);
+    setBodyPhotos(await getAllPhotoRecords());
+  };
 
   // ── Nutrition sync helpers ────────────────────────────────────────────────
   // Per-day sync: called after every saveHistory / saveWater
@@ -3257,6 +3389,135 @@ ${trainingDays.filter(d => {
                   </div>
                 );
               })()}
+
+              {/* ── Körper-Fotos (KI-Analyse) ── */}
+              <div className="glass rounded-3xl p-5 mb-4 shadow-xl">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-base font-bold text-slate-700 flex items-center gap-2">
+                    <Camera className="w-4 h-4 text-pink-600" /> Foto-Verlauf
+                  </h3>
+                  <input
+                    ref={photoFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) analyzeBodyPhoto(file);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    onClick={() => photoFileRef.current?.click()}
+                    disabled={loadingPhotoAnalysis}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white text-xs font-bold shadow-md transition-all disabled:opacity-50"
+                  >
+                    {loadingPhotoAnalysis
+                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analysiere…</>
+                      : <><ImagePlus className="w-3.5 h-3.5" /> Foto hochladen</>
+                    }
+                  </button>
+                </div>
+
+                {bodyPhotos.length === 0 && !loadingPhotoAnalysis && (
+                  <p className="text-xs text-slate-400 mb-2">
+                    Die Waage zeigt nicht immer die Wahrheit. Lade ein Foto hoch — die KI schätzt KFA & Co.
+                    unabhängig davon rein visuell und erkennt mit jedem weiteren Foto Fortschritt oder Rückschritt.
+                  </p>
+                )}
+
+                {photoAnalysisError && (
+                  <p className="text-xs text-rose-500 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 mb-3">
+                    ⚠ {photoAnalysisError}
+                  </p>
+                )}
+
+                {/* Letzte Einschätzung */}
+                {bodyPhotos.length > 0 && (() => {
+                  const latest = bodyPhotos[bodyPhotos.length - 1];
+                  const a = latest.assessment || {};
+                  const tone = a.trend === 'progress'
+                    ? { bg: 'bg-emerald-50 border-emerald-200', label: 'text-emerald-700', val: 'text-emerald-600' }
+                    : a.trend === 'regression'
+                      ? { bg: 'bg-rose-50 border-rose-200', label: 'text-rose-700', val: 'text-rose-600' }
+                      : { bg: 'bg-slate-50 border-slate-200', label: 'text-slate-700', val: 'text-slate-600' };
+                  return (
+                    <div className={`border rounded-xl p-4 mb-3 ${tone.bg}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`text-xs font-bold ${tone.label}`}>{a.trendLabel || 'Einschätzung'}</span>
+                        {a.kfaEstimateLow != null && (
+                          <span className={`text-xs font-semibold ${tone.val}`}>
+                            KFA geschätzt: {a.kfaEstimateLow}–{a.kfaEstimateHigh}%
+                          </span>
+                        )}
+                      </div>
+                      {a.summary && <p className="text-sm text-slate-700 leading-relaxed mb-2">{a.summary}</p>}
+                      {a.observations?.length > 0 && (
+                        <ul className="space-y-1">
+                          {a.observations.map((o, i) => (
+                            <li key={i} className="text-xs text-slate-500">• {o}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="text-xs text-slate-400 mt-2">Foto vom {new Date(latest.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })}</p>
+                    </div>
+                  );
+                })()}
+
+                {/* Thumbnail-Verlauf */}
+                {bodyPhotos.length > 0 && (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {[...bodyPhotos].reverse().map((p) => (
+                      <button
+                        key={p.date}
+                        onClick={() => setViewingPhoto(p)}
+                        className="flex-shrink-0 w-16 text-center"
+                      >
+                        <img src={p.image} alt={p.date} className="w-16 h-16 object-cover rounded-lg border border-slate-200" />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          {new Date(p.date + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Foto-Lightbox ── */}
+              {viewingPhoto && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setViewingPhoto(null)}>
+                  <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                    <img src={viewingPhoto.image} alt={viewingPhoto.date} className="w-full max-h-[50vh] object-contain bg-slate-100" />
+                    <div className="p-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-bold text-slate-700">
+                          {new Date(viewingPhoto.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' })}
+                        </p>
+                        <button
+                          onClick={async () => { await removeBodyPhoto(viewingPhoto.date); setViewingPhoto(null); }}
+                          className="text-xs text-rose-500 hover:underline"
+                        >
+                          Löschen
+                        </button>
+                      </div>
+                      {viewingPhoto.assessment?.summary && (
+                        <p className="text-sm text-slate-600 leading-relaxed">{viewingPhoto.assessment.summary}</p>
+                      )}
+                      {viewingPhoto.assessment?.kfaEstimateLow != null && (
+                        <p className="text-xs text-slate-400">
+                          KFA geschätzt: {viewingPhoto.assessment.kfaEstimateLow}–{viewingPhoto.assessment.kfaEstimateHigh}%
+                        </p>
+                      )}
+                      <button
+                        onClick={() => setViewingPhoto(null)}
+                        className="w-full mt-2 py-2 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition text-sm"
+                      >
+                        Schließen
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* ── KI-Intelligenz ── */}
               <div className="glass rounded-3xl p-5 mb-4 shadow-xl border border-violet-100">

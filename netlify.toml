@@ -24,6 +24,9 @@
 [functions."validate-rules"]
   timeout = 26
 
+[functions."analyze-body-photo"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
