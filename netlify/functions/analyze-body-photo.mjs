@@ -1,13 +1,14 @@
 /**
  * analyze-body-photo.mjs
- * Analysiert ein hochgeladenes Körperfoto per Claude Vision und schätzt KFA
- * sowie Fortschritt/Rückschritt im Vergleich zu Referenzfotos (erstes + letztes).
+ * Analysiert 1-n hochgeladene Körperfotos (eine Session, z.B. mehrere Blickwinkel
+ * vom selben Tag) per Claude Vision und schätzt KFA sowie Fortschritt/Rückschritt
+ * im Vergleich zu Referenzfotos (erstes + letzte Session).
  *
  * Fotos werden hier nur zur einmaligen Auswertung verarbeitet, NICHT serverseitig
  * gespeichert – die Persistenz übernimmt das Frontend (lokal, IndexedDB).
  *
  * POST {
- *   newPhoto: { date, image: "data:image/jpeg;base64,..." },
+ *   newPhotos: [{ date, image: "data:image/jpeg;base64,..." }, ...],
  *   referencePhotos: [{ date, image, label: "erstes"|"letztes" }],
  *   scaleData: { weight, fatPct, musclePct, visceralFat } | null
  * }
@@ -20,8 +21,8 @@ export default async (req) => {
     const apiKey = Netlify.env.get('ANTHROPIC_API_KEY');
     if (!apiKey) return Response.json({ error: 'ANTHROPIC_API_KEY fehlt' }, { status: 500 });
 
-    const { newPhoto, referencePhotos = [], scaleData = null } = await req.json();
-    if (!newPhoto?.image) return Response.json({ error: 'newPhoto fehlt' }, { status: 400 });
+    const { newPhotos = [], referencePhotos = [], scaleData = null } = await req.json();
+    if (newPhotos.length === 0) return Response.json({ error: 'newPhotos fehlt' }, { status: 400 });
 
     const toImageBlock = (dataUrl) => {
       const match = /^data:(image\/\w+);base64,(.+)$/.exec(dataUrl || '');
@@ -29,10 +30,11 @@ export default async (req) => {
       return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
     };
 
-    const newImageBlock = toImageBlock(newPhoto.image);
-    if (!newImageBlock) return Response.json({ error: 'newPhoto hat kein gültiges Bildformat' }, { status: 400 });
+    const newImageBlocks = newPhotos.map(p => toImageBlock(p.image)).filter(Boolean);
+    if (newImageBlocks.length === 0) return Response.json({ error: 'newPhotos hat kein gültiges Bildformat' }, { status: 400 });
 
     const hasReferences = referencePhotos.length > 0;
+    const newDate = newPhotos[0].date;
 
     const scaleText = scaleData
       ? `Aktuelle Waage-Werte (zur Einordnung, NICHT als Korrektur deiner visuellen Schätzung nutzen): Gewicht ${scaleData.weight ?? '–'} kg, KFA ${scaleData.fatPct ?? '–'}%, Muskelanteil ${scaleData.musclePct ?? '–'}%, Viszeralfett ${scaleData.visceralFat ?? '–'}`
@@ -41,13 +43,14 @@ export default async (req) => {
     const content = [
       {
         type: 'text',
-        text: `Du bist ein erfahrener Coach für Körperkomposition. Analysiere das NEUE Foto (Datum: ${newPhoto.date}) rein visuell.
+        text: `Du bist ein erfahrener Coach für Körperkomposition. Analysiere die NEUEN Foto(s) (Datum: ${newDate}) rein visuell.
+${newImageBlocks.length > 1 ? `Es sind ${newImageBlocks.length} Aufnahmen derselben Person vom selben Tag (z.B. verschiedene Blickwinkel) – nutze alle zusammen für eine genauere Gesamteinschätzung, nicht als separate Bewertungen.` : ''}
 
 ${scaleText}
 
 ${hasReferences
-  ? `Du bekommst zusätzlich ${referencePhotos.length} Referenzfoto(s) zum Vergleich, jeweils mit Label und Datum markiert. Vergleiche das neue Foto mit jedem Referenzfoto und beurteile, ob sich der Körper sichtbar verändert hat (Fortschritt, Rückschritt oder kein erkennbarer Unterschied).`
-  : 'Dies ist das erste Foto – es gibt noch keine Referenz. Erstelle nur eine Baseline-Einschätzung, kein Vergleich möglich.'}
+  ? `Du bekommst zusätzlich ${referencePhotos.length} Referenzfoto(s) zum Vergleich, jeweils mit Label und Datum markiert. Vergleiche die neuen Fotos mit jedem Referenzfoto und beurteile, ob sich der Körper sichtbar verändert hat (Fortschritt, Rückschritt oder kein erkennbarer Unterschied).`
+  : 'Dies ist die erste Aufnahme – es gibt noch keine Referenz. Erstelle nur eine Baseline-Einschätzung, kein Vergleich möglich.'}
 
 Wichtig:
 - Deine KFA-Schätzung soll UNABHÄNGIG von den Waage-Werten erfolgen, rein aus dem visuellen Eindruck (Muskeldefinition, Fettverteilung, Bauchregion etc.)
@@ -64,7 +67,7 @@ Antworte NUR mit diesem JSON (kein Markdown):
   "summary": "<2-3 Sätze Gesamteinschätzung auf Deutsch>"
 }`,
       },
-      newImageBlock,
+      ...newImageBlocks,
     ];
 
     referencePhotos.forEach((ref) => {
