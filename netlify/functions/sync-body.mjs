@@ -73,38 +73,51 @@ export default async (req) => {
 
   const rows = await dataRes.json();
 
-  // ── 3. Map to Kalorienzähler format ────────────────────────────────────────
-  const measurements = rows.map(e => {
-    const rd = e.raw_data || {};
-    const extra = rd.extra || {};
+  // Deduplicate: keep one row per date (last one wins, usually most complete)
+  const byDate = new Map();
+  for (const row of rows) {
+    const date = (row.measured_at || '').substring(0, 10);
+    const existing = byDate.get(date);
+    // Prefer rows that have body composition data
+    if (!existing || row.body_fat_pct != null) byDate.set(date, row);
+  }
+  const deduped = [...byDate.values()].sort((a, b) =>
+    (a.measured_at || '').localeCompare(b.measured_at || '')
+  );
 
-    // Prefer raw_data values (exact as Blood Analytics displays them)
-    // Fallback: compute from base columns
-    const musclePct   = rd.muscle_mass_pct   != null ? +rd.muscle_mass_pct.toFixed(1)
-                      : (e.muscle_mass != null && e.weight > 0)
-                        ? +((e.muscle_mass / e.weight) * 100).toFixed(1) : null;
-    const fatFreePct  = rd.fat_free_mass_pct != null ? +rd.fat_free_mass_pct.toFixed(1)
-                      : (e.fat_free_mass != null && e.weight > 0)
-                        ? +((e.fat_free_mass / e.weight) * 100).toFixed(1) : null;
+  // ── 3. Map to Kalorienzähler format ────────────────────────────────────────
+  // extra keys are German (Blood Analytics/Fitdays app language)
+  const measurements = deduped.map(e => {
+    const rd    = e.raw_data || {};
+    const extra = rd.extra   || {};
+
+    const fatFreePct = rd.fat_free_mass_pct != null ? +rd.fat_free_mass_pct.toFixed(1)
+                     : (e.fat_free_mass != null && e.weight > 0)
+                       ? +((e.fat_free_mass / e.weight) * 100).toFixed(1) : null;
+
+    // Blood Analytics shows "Skelettmuskulatur %" – stored as skelettmuskulatur_pct in extra
+    const musclePct = extra.skelettmuskulatur_pct != null
+                      ? +extra.skelettmuskulatur_pct.toFixed(1)
+                      : null;
 
     return {
-      date:              (e.measured_at || '').substring(0, 10),
-      weight:            e.weight        != null ? +e.weight.toFixed(1)        : null,
-      fatPct:            e.body_fat_pct  != null ? +e.body_fat_pct.toFixed(1)  : null,
-      musclePct,                                      // muscle mass % (wie Blood Analytics zeigt)
-      fatFreePct,                                     // fat-free / lean body mass %
-      muscleMassKg:      e.muscle_mass   != null ? +e.muscle_mass.toFixed(1)   : null,
-      fatFreeMassKg:     e.fat_free_mass != null ? +e.fat_free_mass.toFixed(1) : null,
-      visceralFat:       e.visceral_fat  != null ? +e.visceral_fat.toFixed(1)  : null,
-      bmi:               e.bmi           != null ? +e.bmi.toFixed(1)           : null,
-      bodyWaterPct:      e.body_water_pct!= null ? +e.body_water_pct.toFixed(1): null,
-      boneMassKg:        e.bone_mass     != null ? +e.bone_mass.toFixed(1)     : null,
-      bmr:               e.bmr           != null ? Math.round(e.bmr)           : null,
-      metabolicAge:      e.metabolic_age,
-      // Extra fields from raw_data
-      skeletalMusclePct: extra.skeletal_muscle_pct != null ? +extra.skeletal_muscle_pct.toFixed(1) : null,
-      proteinPct:        extra.protein_pct         != null ? +extra.protein_pct.toFixed(1)         : null,
-      subcutFatPct:      extra.subcutaneous_fat_pct!= null ? +extra.subcutaneous_fat_pct.toFixed(1): null,
+      date:          (e.measured_at || '').substring(0, 10),
+      weight:        e.weight        != null ? +e.weight.toFixed(1)        : null,
+      fatPct:        e.body_fat_pct  != null ? +e.body_fat_pct.toFixed(1)  : null,
+      musclePct,
+      fatFreePct,
+      muscleMassKg:  e.muscle_mass   != null ? +e.muscle_mass.toFixed(1)   : null,
+      fatFreeMassKg: e.fat_free_mass != null ? +e.fat_free_mass.toFixed(1) : null,
+      visceralFat:   e.visceral_fat  != null ? +e.visceral_fat.toFixed(1)  : null,
+      bmi:           e.bmi           != null ? +e.bmi.toFixed(1)           : null,
+      bodyWaterPct:  e.body_water_pct!= null ? +e.body_water_pct.toFixed(1): null,
+      boneMassKg:    e.bone_mass     != null ? +e.bone_mass.toFixed(1)     : null,
+      bmr:           e.bmr           != null ? Math.round(e.bmr)           : null,
+      metabolicAge:  e.metabolic_age,
+      // Extra fields – German keys from Fitdays/Blood Analytics
+      skeletalMusclePct: extra.skelettmuskulatur_pct   != null ? +extra.skelettmuskulatur_pct.toFixed(1)   : null,
+      proteinPct:        extra.proteine_pct             != null ? +extra.proteine_pct.toFixed(1)             : null,
+      subcutFatPct:      extra.unterhautfettgewebe_pct  != null ? +extra.unterhautfettgewebe_pct.toFixed(1)  : null,
       source: 'blood-analytics',
     };
   });
