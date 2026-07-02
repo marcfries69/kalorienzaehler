@@ -109,9 +109,25 @@ export default async (req) => {
     };
   });
 
+  // Debug: expose raw field names of first row (no values) to diagnose mapping issues
+  const debugSample = rows[0] ? {
+    topLevelKeys: Object.keys(rows[0]),
+    rawDataKeys:  Object.keys(rows[0].raw_data || {}),
+    rawDataExtraKeys: Object.keys((rows[0].raw_data || {}).extra || {}),
+    firstRowValues: {
+      body_fat_pct:  rows[0].body_fat_pct,
+      muscle_mass:   rows[0].muscle_mass,
+      visceral_fat:  rows[0].visceral_fat,
+      fat_free_mass: rows[0].fat_free_mass,
+      weight:        rows[0].weight,
+    },
+    rawDataValues: rows[0].raw_data,
+  } : null;
+
   return Response.json({
     measurements,
     syncedAt: new Date().toISOString(),
     count:    measurements.length,
+    debug:    debugSample,
   });
 };
