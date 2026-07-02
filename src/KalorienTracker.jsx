@@ -3117,6 +3117,11 @@ ${trainingDays.filter(d => {
         {/* ════════════════════════════════════════════════════════════════════ */}
         {activeTab === 'coach' && (() => {
           const latest = bodyMeasurements.length > 0 ? bodyMeasurements[bodyMeasurements.length - 1] : null;
+          // For body-comp KPIs use the last entry that actually has body-comp data
+          // (avoids showing "–" when the most recent entry is weight-only)
+          const latestBodyComp = [...bodyMeasurements].reverse().find(
+            m => m.fatPct != null || m.visceralFat != null || m.musclePct != null
+          ) || latest;
           const nutritionDays = Object.keys(history).length;
 
           const deltaColor = (current, goal, lowerIsBetter = false) => {
@@ -3247,12 +3252,15 @@ ${trainingDays.filter(d => {
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
                     {metrics.map(m => {
-                      const val = latest[m.key];
+                      const src = m.key === 'weight' ? latest : latestBodyComp;
+                      const val = src?.[m.key] ?? null;
                       const goal = bodyGoals[m.key];
+                      const staleDate = m.key !== 'weight' && latestBodyComp?.date && latest?.date && latestBodyComp.date !== latest.date;
                       return (
                         <div key={m.key} className={`bg-gradient-to-br ${m.color} border rounded-xl p-3`}>
                           <div className={`flex items-center gap-1.5 ${m.textColor} text-xs font-semibold mb-1`}>
                             {m.icon} {m.label}
+                            {staleDate && <span className="text-slate-400 font-normal">({new Date(latestBodyComp.date + 'T12:00:00').toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })})</span>}
                           </div>
                           <div className="flex items-end gap-1">
                             <span className="text-2xl font-bold text-slate-800 mono">
