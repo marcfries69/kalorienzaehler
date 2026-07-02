@@ -73,20 +73,26 @@ export default async (req) => {
 
   const rows = await dataRes.json();
 
-  // Deduplicate: keep one row per date (last one wins, usually most complete)
+  // Deduplicate: per date keep the row with the most non-null body-comp fields
+  const countFields = r => ['body_fat_pct','muscle_mass','visceral_fat','fat_free_mass','body_water_pct','bmr']
+    .filter(k => r[k] != null).length;
   const byDate = new Map();
   for (const row of rows) {
     const date = (row.measured_at || '').substring(0, 10);
     const existing = byDate.get(date);
-    // Prefer rows that have body composition data
-    if (!existing || row.body_fat_pct != null) byDate.set(date, row);
+    if (!existing || countFields(row) > countFields(existing)) byDate.set(date, row);
   }
   const deduped = [...byDate.values()].sort((a, b) =>
     (a.measured_at || '').localeCompare(b.measured_at || '')
   );
 
   // ── 3. Map to Kalorienzähler format ────────────────────────────────────────
-  // extra keys are German (Blood Analytics/Fitdays app language)
+  // Blood Analytics extra keys vary: German (Fitdays DE) or English depending on app version/row
+  const pick = (obj, ...keys) => {
+    for (const k of keys) if (obj[k] != null) return obj[k];
+    return null;
+  };
+
   const measurements = deduped.map(e => {
     const rd    = e.raw_data || {};
     const extra = rd.extra   || {};
@@ -95,10 +101,11 @@ export default async (req) => {
                      : (e.fat_free_mass != null && e.weight > 0)
                        ? +((e.fat_free_mass / e.weight) * 100).toFixed(1) : null;
 
-    // Blood Analytics shows "Skelettmuskulatur %" – stored as skelettmuskulatur_pct in extra
-    const musclePct = extra.skelettmuskulatur_pct != null
-                      ? +extra.skelettmuskulatur_pct.toFixed(1)
-                      : null;
+    // Try German key first, then English fallback
+    const rawMusclePct  = pick(extra, 'skelettmuskulatur_pct', 'skeletal_muscle_pct');
+    const rawProtein    = pick(extra, 'proteine_pct',          'protein_pct');
+    const rawSubcutFat  = pick(extra, 'unterhautfettgewebe_pct', 'subcutaneous_fat_pct');
+    const musclePct     = rawMusclePct != null ? +rawMusclePct.toFixed(1) : null;
 
     return {
       date:          (e.measured_at || '').substring(0, 10),
@@ -114,10 +121,9 @@ export default async (req) => {
       boneMassKg:    e.bone_mass     != null ? +e.bone_mass.toFixed(1)     : null,
       bmr:           e.bmr           != null ? Math.round(e.bmr)           : null,
       metabolicAge:  e.metabolic_age,
-      // Extra fields – German keys from Fitdays/Blood Analytics
-      skeletalMusclePct: extra.skelettmuskulatur_pct   != null ? +extra.skelettmuskulatur_pct.toFixed(1)   : null,
-      proteinPct:        extra.proteine_pct             != null ? +extra.proteine_pct.toFixed(1)             : null,
-      subcutFatPct:      extra.unterhautfettgewebe_pct  != null ? +extra.unterhautfettgewebe_pct.toFixed(1)  : null,
+      skeletalMusclePct: musclePct,
+      proteinPct:        rawProtein   != null ? +rawProtein.toFixed(1)   : null,
+      subcutFatPct:      rawSubcutFat != null ? +rawSubcutFat.toFixed(1) : null,
       source: 'blood-analytics',
     };
   });
