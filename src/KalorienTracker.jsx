@@ -215,6 +215,8 @@ const KalorienTracker = () => {
   const photoFileRef = useRef(null);
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [showPdfMenu, setShowPdfMenu] = useState(false);
+  const [pdfFrom, setPdfFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 13); return toDateKey(d); });
+  const [pdfTo, setPdfTo]     = useState(() => toDateKey(new Date()));
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [chatMessages, setChatMessages] = useState([]); // {role:'user'|'assistant', content:string}
@@ -343,16 +345,33 @@ const KalorienTracker = () => {
     return sportKcalCredit(todayTraining);
   }, [trainingDays, todayKey]);
 
-  // ── PDF Export (14-Tage-Report) ───────────────────────────────────────────
-  const exportPDF = (daysCount = 14) => {
+  // ── PDF Export (frei wählbarer Zeitraum, tagegenau) ───────────────────────
+  // Aufruf entweder mit Tagesanzahl (Presets) oder mit { from, to } Datums-Keys.
+  const exportPDF = (arg = 14) => {
     const exportDate = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-    // ── Zeitraum sammeln ──────────────────────────────────────────────────────
-    const days14 = Array.from({ length: daysCount }, (_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - (daysCount - 1 - i));
-      return toDateKey(d);
-    });
+    // ── Zeitraum bestimmen ────────────────────────────────────────────────────
+    let startKey, endKey;
+    if (arg && typeof arg === 'object' && arg.from && arg.to) {
+      startKey = arg.from;
+      endKey   = arg.to;
+      if (startKey > endKey) [startKey, endKey] = [endKey, startKey]; // Falls vertauscht
+    } else {
+      const days = typeof arg === 'number' ? arg : 14;
+      const end = new Date();
+      const start = new Date();
+      start.setDate(start.getDate() - (days - 1));
+      startKey = toDateKey(start);
+      endKey   = toDateKey(end);
+    }
+
+    // Tagesliste aus dem Zeitraum aufbauen (inklusive Start und Ende)
+    const days14 = [];
+    for (let d = new Date(startKey + 'T12:00:00'); toDateKey(d) <= endKey; d.setDate(d.getDate() + 1)) {
+      days14.push(toDateKey(d));
+    }
+    const daysCount = days14.length;
+    const rangeLabel = `${new Date(startKey + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })} – ${new Date(endKey + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}`;
 
     // Körperdaten-Map
     const bodyMap = {};
@@ -422,7 +441,7 @@ const KalorienTracker = () => {
     docL.text(`Ernährungs- & Trainings-Report – ${periodLabel}`, 14, 10);
     docL.setFontSize(8);
     docL.setFont('helvetica', 'normal');
-    docL.text(`Exportiert am ${exportDate}  ·  Kalorienmonitor`, 14, 18);
+    docL.text(`Zeitraum ${rangeLabel}  ·  Exportiert am ${exportDate}  ·  Kalorienmonitor`, 14, 18);
 
     // ── Haupttabelle ──────────────────────────────────────────────────────────
     docL.setTextColor(30, 41, 59);
@@ -537,7 +556,7 @@ const KalorienTracker = () => {
     docL.setTextColor(148, 163, 184);
     docL.text('Kalorienmonitor · kalorienmonitor.netlify.app', pageWL / 2, pageHL - 5, { align: 'center' });
 
-    const filename = `ernaehrung-report-${daysCount}t-${exportDate.replace(/\./g, '-')}.pdf`;
+    const filename = `ernaehrung-report-${startKey}_bis_${endKey}.pdf`;
     docL.save(filename);
   };
 
@@ -2663,7 +2682,9 @@ ${trainingDays.filter(d => {
                     <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showPdfMenu ? 'rotate-180' : ''}`} />
                   </button>
                   {showPdfMenu && (
-                    <div className="absolute right-0 mt-1 w-36 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden z-10">
+                    <div className="absolute right-0 mt-1 w-60 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden z-10">
+                      {/* Schnellauswahl */}
+                      <p className="px-3 pt-2.5 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wide">Schnellauswahl</p>
                       {[
                         { days: 14, label: '14 Tage' },
                         { days: 28, label: '4 Wochen' },
@@ -2677,6 +2698,35 @@ ${trainingDays.filter(d => {
                           {opt.label}
                         </button>
                       ))}
+
+                      {/* Tagegenauer Zeitraum */}
+                      <div className="border-t border-slate-100 mt-1 pt-2 px-3 pb-3">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1.5">Eigener Zeitraum</p>
+                        <label className="block text-[11px] text-slate-500 mb-0.5">Von</label>
+                        <input
+                          type="date"
+                          value={pdfFrom}
+                          max={pdfTo}
+                          onChange={e => setPdfFrom(e.target.value)}
+                          className="w-full mb-2 px-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-400"
+                        />
+                        <label className="block text-[11px] text-slate-500 mb-0.5">Bis</label>
+                        <input
+                          type="date"
+                          value={pdfTo}
+                          min={pdfFrom}
+                          max={toDateKey(new Date())}
+                          onChange={e => setPdfTo(e.target.value)}
+                          className="w-full mb-2.5 px-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-400"
+                        />
+                        <button
+                          onClick={() => { exportPDF({ from: pdfFrom, to: pdfTo }); setShowPdfMenu(false); }}
+                          disabled={!pdfFrom || !pdfTo}
+                          className="w-full py-1.5 bg-teal-500 hover:bg-teal-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          Zeitraum exportieren
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
