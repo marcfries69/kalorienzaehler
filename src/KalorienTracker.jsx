@@ -173,6 +173,9 @@ const KalorienTracker = () => {
   const [monthOffset, setMonthOffset] = useState(0); // 0 = aktueller Monat, -1 = Vormonat, ...
   const [weekOffset, setWeekOffset] = useState(0); // 0 = aktuelle 7-Tage-Periode, -1 = vorherige, ...
   const [input, setInput] = useState('');
+  const [pendingFoodAnalysis, setPendingFoodAnalysis] = useState(null); // KI-Schätzung wartet auf Freigabe
+  const [loadingFoodPhoto, setLoadingFoodPhoto] = useState(false);
+  const foodPhotoRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -1424,6 +1427,44 @@ const KalorienTracker = () => {
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
+  };
+
+  // ── Essens-Foto: KI schätzt, Nutzer gibt frei ────────────────────────────────
+  const analyzeFoodPhoto = async (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    setLoadingFoodPhoto(true);
+    try {
+      const image = await compressImage(file, 1024, 0.75);
+      const hint = input.trim(); // optionale Notiz aus dem Textfeld (z.B. "mit extra Käse")
+      const res = await fetch('/.netlify/functions/analyze-food-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image, hint: hint || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Foto-Analyse fehlgeschlagen');
+      // Nichts wird gespeichert – erst nach Freigabe im Dialog
+      setPendingFoodAnalysis({ ...json, photo: image });
+    } catch (err) {
+      alert('Fehler: ' + err.message);
+    } finally {
+      setLoadingFoodPhoto(false);
+    }
+  };
+
+  const approveFoodAnalysis = () => {
+    if (!pendingFoodAnalysis) return;
+    const { photo, assumptions, ...nutrition } = pendingFoodAnalysis; // Foto/Annahmen nicht persistieren
+    const newMeal = {
+      id: Date.now(),
+      time: new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+      ...nutrition,
+    };
+    saveHistory({ ...history, [selectedDate]: [...currentMeals, newMeal] });
+    setPendingFoodAnalysis(null);
+    setInput('');
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2000);
   };
 
   // ── Body Tracking handlers ───────────────────────────────────────────────────
@@ -2749,6 +2790,26 @@ ${trainingDays.filter(d => {
                     disabled={loading}
                     className="flex-1 px-5 py-4 rounded-2xl border-2 border-slate-200 focus:border-emerald-500 focus:outline-none input-glow disabled:opacity-50 text-slate-700 placeholder-slate-400"
                   />
+                  {/* Foto-Analyse: Kamera/Galerie → KI-Schätzung → Freigabe-Dialog */}
+                  <input
+                    ref={foodPhotoRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => { analyzeFoodPhoto(e.target.files?.[0]); e.target.value = ''; }}
+                  />
+                  <button
+                    onClick={() => foodPhotoRef.current?.click()}
+                    disabled={loading || loadingFoodPhoto}
+                    title="Foto vom Essen aufnehmen – KI schätzt die Nährwerte"
+                    className="px-4 py-4 rounded-2xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-semibold disabled:opacity-50 transition-all shadow-lg flex items-center"
+                  >
+                    {loadingFoodPhoto
+                      ? <Loader2 className="w-5 h-5 animate-spin" />
+                      : <Camera className="w-5 h-5" />
+                    }
+                  </button>
                   <button
                     onClick={handleSubmit}
                     disabled={loading || !input.trim()}
@@ -2760,6 +2821,11 @@ ${trainingDays.filter(d => {
                     }
                   </button>
                 </div>
+                {loadingFoodPhoto && (
+                  <p className="text-xs text-violet-500 font-medium mt-2 text-center animate-pulse">
+                    📷 KI analysiert dein Foto…
+                  </p>
+                )}
                 {savedFlash && (
                   <p className="text-xs text-emerald-600 font-medium mt-2 text-center animate-pulse">
                     ✓ Gespeichert
@@ -4576,6 +4642,119 @@ ${trainingDays.filter(d => {
                   <RefreshCw className="w-4 h-4" /> Neue Vorschläge
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* FOOD-PHOTO FREIGABE-MODAL – KI-Schätzung muss bestätigt werden           */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {pendingFoodAnalysis && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-violet-500 to-purple-500 text-white p-5 rounded-t-3xl flex items-center justify-between z-10">
+              <div className="flex items-center gap-3">
+                <Camera className="w-6 h-6" />
+                <h2 className="text-lg font-bold">KI-Schätzung prüfen</h2>
+              </div>
+              <button onClick={() => setPendingFoodAnalysis(null)} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5">
+              {/* Foto + Name */}
+              <div className="flex gap-3 mb-4">
+                <img src={pendingFoodAnalysis.photo} alt="Essens-Foto" className="w-20 h-20 rounded-xl object-cover border border-slate-200 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-800 leading-tight">{pendingFoodAnalysis.name}</p>
+                  <p className="text-2xl font-bold text-emerald-600 mono mt-1">{Math.round(pendingFoodAnalysis.kcal)} kcal</p>
+                  {pendingFoodAnalysis.healthScore != null && (
+                    <p className="text-xs text-slate-400 mt-0.5">Health Score: {pendingFoodAnalysis.healthScore}/6</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Makros */}
+              <div className="grid grid-cols-4 gap-2 mb-4">
+                {[
+                  { label: 'Protein', val: pendingFoodAnalysis.protein, color: 'text-blue-600 bg-blue-50' },
+                  { label: 'Carbs',   val: pendingFoodAnalysis.carbs,   color: 'text-amber-600 bg-amber-50' },
+                  { label: 'Fett',    val: pendingFoodAnalysis.fat,     color: 'text-purple-600 bg-purple-50' },
+                  { label: 'Faser',   val: pendingFoodAnalysis.fiber,   color: 'text-green-600 bg-green-50' },
+                ].map(m => (
+                  <div key={m.label} className={`rounded-xl p-2 text-center ${m.color.split(' ')[1]}`}>
+                    <p className={`text-sm font-bold mono ${m.color.split(' ')[0]}`}>{Math.round(m.val || 0)}g</p>
+                    <p className="text-[10px] text-slate-500">{m.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Bestandteile */}
+              {pendingFoodAnalysis.components?.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Erkannte Bestandteile</p>
+                  <div className="space-y-1">
+                    {pendingFoodAnalysis.components.map((c, i) => (
+                      <div key={i} className="flex justify-between text-xs bg-slate-50 rounded-lg px-3 py-1.5">
+                        <span className="text-slate-700">{c.name}{c.amount ? ` · ${c.amount}` : ''}</span>
+                        <span className="text-slate-500 mono flex-shrink-0 ml-2">{Math.round(c.kcal || 0)} kcal</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Mikronährstoffe (nur mit Wert) */}
+              {pendingFoodAnalysis.micronutrients && (() => {
+                const micros = MICRO_TARGETS
+                  .map(t => ({ ...t, val: pendingFoodAnalysis.micronutrients[t.key] }))
+                  .filter(t => t.val > 0);
+                if (micros.length === 0) return null;
+                return (
+                  <div className="mb-4">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Mikronährstoffe (geschätzt)</p>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {micros.map(t => (
+                        <div key={t.key} className="bg-slate-50 rounded-lg px-2 py-1.5 text-center">
+                          <p className="text-xs font-semibold text-slate-700 mono">{t.emoji} {t.val}{t.unit}</p>
+                          <p className="text-[9px] text-slate-400">{t.label}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Annahmen der KI */}
+              {pendingFoodAnalysis.assumptions?.length > 0 && (
+                <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  <p className="text-xs font-bold text-amber-700 mb-1">⚠ Annahmen der KI</p>
+                  {pendingFoodAnalysis.assumptions.map((a, i) => (
+                    <p key={i} className="text-xs text-amber-800 leading-relaxed">· {a}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* Freigabe */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPendingFoodAnalysis(null)}
+                  className="flex-1 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-semibold transition-colors"
+                >
+                  Verwerfen
+                </button>
+                <button
+                  onClick={approveFoodAnalysis}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-semibold transition-all shadow-md flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" /> Übernehmen
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 text-center mt-2">
+                Werte sind KI-Schätzungen vom Foto. Nach Übernahme wie gewohnt löschbar.
+              </p>
             </div>
           </div>
         </div>
