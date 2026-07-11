@@ -686,38 +686,22 @@ const KalorienTracker = () => {
       const savedCalcData = localStorage.getItem('calculator-data');
       if (savedCalcData) setCalculatorData(JSON.parse(savedCalcData));
 
-      // ── Nutrition auto-sync (once per day) ──────────────────────────────────
+      // ── Nutrition auto-sync ──────────────────────────────────────────────────
+      // Immer erst PULL (Mahlzeiten anderer Geräte übernehmen), danach höchstens
+      // 1×/Tag Voll-Push. Die Reihenfolge ist wichtig: nach dem Pull ist der
+      // lokale Stand der frischeste, der Push kann nichts Neueres überschreiben.
       const lastNutrSync = localStorage.getItem('supabase-last-full-sync');
       const todayStr = toDateKey(new Date());
-      if (!lastNutrSync || lastNutrSync !== todayStr) {
-        // fire-and-forget in background
-        (async () => {
-          try {
-            const wh   = savedWater ? JSON.parse(savedWater) : {};
-            const goal = savedGoal ? (parseInt(savedGoal) || 1800) : 1800;
-            const rows = Object.entries(hist).filter(([, m]) => m && m.length > 0).map(([dk, meals]) => {
-              const t = meals.reduce((acc, m) => ({
-                kcal: acc.kcal+(m.kcal||0), protein: acc.protein+(m.protein||0),
-                carbs: acc.carbs+(m.carbs||0), fat: acc.fat+(m.fat||0), fiber: acc.fiber+(m.fiber||0),
-              }), { kcal:0, protein:0, carbs:0, fat:0, fiber:0 });
-              return {
-                user_id: NUTRITION_USER_ID, date: dk,
-                total_kcal: Math.round(t.kcal), protein_g: Math.round(t.protein*10)/10,
-                carbs_g: Math.round(t.carbs*10)/10, fat_g: Math.round(t.fat*10)/10,
-                fiber_g: Math.round(t.fiber*10)/10, water_ml: wh[dk]||0,
-                kcal_goal: goal,
-                meals: meals.map(m => ({ name: m.name||m.text, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber })),
-                updated_at: new Date().toISOString(),
-              };
-            });
-            for (let i = 0; i < rows.length; i += 50) {
-              await sbClient.from('nutrition_log').upsert(rows.slice(i, i+50), { onConflict: 'user_id,date' });
-            }
+      (async () => {
+        try {
+          await pullNutritionFromSupabase();
+          if (!lastNutrSync || lastNutrSync !== todayStr) {
+            const count = await fullPushNutrition();
             localStorage.setItem('supabase-last-full-sync', todayStr);
-            console.log(`[NutrSync] Auto sync on load: ${rows.length} days`);
-          } catch (e) { console.warn('[NutrSync] Auto sync error:', e.message); }
-        })();
-      }
+            console.log(`[NutrSync] Auto sync on load: ${count} days pushed`);
+          }
+        } catch (e) { console.warn('[NutrSync] Auto sync error:', e.message); }
+      })();
     } catch (e) {
       console.error('Ladefehler:', e);
     } finally {
@@ -785,63 +769,155 @@ const KalorienTracker = () => {
     setBodyPhotos(await getAllPhotoRecords());
   };
 
-  // ── Nutrition sync helpers ────────────────────────────────────────────────
-  // Per-day sync: called after every saveHistory / saveWater
-  const syncNutritionDayToSupabase = async (dateKey, meals, waterMl, goal) => {
-    if (!meals || meals.length === 0) return;
+  // ── Nutrition sync (Zwei-Wege, Multi-Device) ────────────────────────────────
+  // Konzept: Last-Write-Wins pro Tag. Jede lokale Änderung stempelt den Tag in
+  // 'history-updated-at'; der Stempel wandert als updated_at in die nutrition_log-
+  // Zeile. Beim Pull gewinnt der neuere Stempel – so erscheinen Mahlzeiten, die
+  // auf einem anderen Gerät erfasst wurden, hier, ohne frischere lokale Tage zu
+  // überschreiben. Die meals-Spalte trägt die VOLLEN Mahlzeit-Objekte (id, Zeit,
+  // Bestandteile, Health Score), damit jedes Gerät den kompletten Datensatz hat.
+  const dayTsRef = useRef(null);
+  const loadDayTs = () => {
+    if (!dayTsRef.current) {
+      try { dayTsRef.current = JSON.parse(localStorage.getItem('history-updated-at') || '{}'); }
+      catch { dayTsRef.current = {}; }
+    }
+    return dayTsRef.current;
+  };
+  const setDayTs = (dateKey, iso) => {
+    const m = loadDayTs();
+    m[dateKey] = iso;
+    localStorage.setItem('history-updated-at', JSON.stringify(m));
+  };
+
+  const buildNutritionRow = (dateKey, meals, waterMl, goal, ts) => {
+    const totals = (meals || []).reduce((acc, m) => ({
+      kcal: acc.kcal + (m.kcal || 0), protein: acc.protein + (m.protein || 0),
+      carbs: acc.carbs + (m.carbs || 0), fat: acc.fat + (m.fat || 0), fiber: acc.fiber + (m.fiber || 0),
+    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+    return {
+      user_id: NUTRITION_USER_ID, date: dateKey,
+      total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
+      carbs_g: Math.round(totals.carbs * 10) / 10, fat_g: Math.round(totals.fat * 10) / 10,
+      fiber_g: Math.round(totals.fiber * 10) / 10, water_ml: waterMl || 0,
+      kcal_goal: goal,
+      meals: meals || [],   // volle Objekte – Grundlage für Multi-Device-Sync
+      updated_at: ts,
+    };
+  };
+
+  // Per-day push: nach jedem saveHistory / saveWater (auch leere Tage → Löschung propagiert)
+  const syncNutritionDayToSupabase = async (dateKey, meals, waterMl, goal, ts) => {
     try {
-      const totals = meals.reduce((acc, m) => ({
-        kcal: acc.kcal + (m.kcal || 0), protein: acc.protein + (m.protein || 0),
-        carbs: acc.carbs + (m.carbs || 0), fat: acc.fat + (m.fat || 0), fiber: acc.fiber + (m.fiber || 0),
-      }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
-      await sbClient.from('nutrition_log').upsert({
-        user_id: NUTRITION_USER_ID, date: dateKey,
-        total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
-        carbs_g: Math.round(totals.carbs * 10) / 10, fat_g: Math.round(totals.fat * 10) / 10,
-        fiber_g: Math.round(totals.fiber * 10) / 10, water_ml: waterMl || 0,
-        kcal_goal: goal,
-        meals: meals.map(m => ({ name: m.name || m.text, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber })),
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id,date' });
+      await sbClient.from('nutrition_log').upsert(
+        buildNutritionRow(dateKey, meals, waterMl, goal, ts || new Date().toISOString()),
+        { onConflict: 'user_id,date' }
+      );
     } catch (e) { console.warn('[NutrSync] Day sync error:', e.message); }
   };
 
-  // Full sync (all days) — called on demand
+  // Pull: Remote-Tage übernehmen, die neuer sind als der lokale Stempel.
+  // Tage ohne lokalen Stempel: lokale Daten gewinnen (Erstmigration – das Gerät
+  // mit den vollständigen Daten soll Remote nicht durch Alt-Zeilen verlieren);
+  // existiert lokal nichts für den Tag, wird Remote übernommen.
+  const lastPullRef = useRef(0);
+  const pullNutritionFromSupabase = async () => {
+    try {
+      const { data, error } = await sbClient
+        .from('nutrition_log')
+        .select('date, meals, water_ml, updated_at')
+        .eq('user_id', NUTRITION_USER_ID);
+      if (error) throw error;
+      lastPullRef.current = Date.now();
+
+      const tsMap  = loadDayTs();
+      let hist, water;
+      try { hist  = JSON.parse(localStorage.getItem('history-data')  || '{}'); } catch { hist  = {}; }
+      try { water = JSON.parse(localStorage.getItem('water-history') || '{}'); } catch { water = {}; }
+
+      let adopted = 0;
+      for (const row of (data || [])) {
+        const d = row.date;
+        const remoteTs = row.updated_at || '';
+        const localTs  = tsMap[d];
+        const hasLocal = Array.isArray(hist[d]) && hist[d].length > 0;
+        const remoteWins = localTs ? remoteTs > localTs : !hasLocal;
+        if (!remoteWins) continue;
+
+        const meals = (Array.isArray(row.meals) ? row.meals : [])
+          .map((m, i) => ({ ...m, id: m.id ?? `${d}-remote-${i}` }));
+        if (meals.length > 0) hist[d] = meals; else delete hist[d];
+        if (row.water_ml > 0) water[d] = row.water_ml; else delete water[d];
+        tsMap[d] = remoteTs;
+        adopted++;
+      }
+
+      if (adopted > 0) {
+        localStorage.setItem('history-data', JSON.stringify(hist));
+        localStorage.setItem('water-history', JSON.stringify(water));
+        localStorage.setItem('history-updated-at', JSON.stringify(tsMap));
+        setHistory(hist);
+        setWaterHistory(water);
+        console.log(`[NutrSync] Pull: ${adopted} Tag(e) von anderem Gerät übernommen`);
+      }
+      return adopted;
+    } catch (e) {
+      console.warn('[NutrSync] Pull error:', e.message);
+      return 0;
+    }
+  };
+
+  // Full push: alle lokalen Tage hochladen. updated_at = lokaler Tages-Stempel
+  // (NICHT "jetzt"), damit ein täglicher Voll-Push keine frischeren Änderungen
+  // anderer Geräte überstempelt. Immer NACH einem Pull aufrufen.
+  const fullPushNutrition = async () => {
+    let hist, wh;
+    try { hist = JSON.parse(localStorage.getItem('history-data')  || '{}'); } catch { hist = {}; }
+    try { wh   = JSON.parse(localStorage.getItem('water-history') || '{}'); } catch { wh = {}; }
+    const goal  = parseInt(localStorage.getItem('calorie-goal') || '1800');
+    const tsMap = loadDayTs();
+    const legacyTs = new Date().toISOString();
+    const rows = Object.entries(hist)
+      .filter(([, m]) => m && m.length > 0)
+      .map(([dk, meals]) => {
+        if (!tsMap[dk]) setDayTs(dk, legacyTs); // Erstmigration: Stempel nachziehen
+        return buildNutritionRow(dk, meals, wh[dk] || 0, goal, tsMap[dk]);
+      });
+    for (let i = 0; i < rows.length; i += 50) {
+      await sbClient.from('nutrition_log').upsert(rows.slice(i, i + 50), { onConflict: 'user_id,date' });
+    }
+    return rows.length;
+  };
+
+  // Manueller Sync (Button): erst Pull, dann Voll-Push → beide Seiten aktuell
   const manualNutritionSync = async () => {
     setNutritionSyncStatus('syncing');
     try {
-      const hist = JSON.parse(localStorage.getItem('history-data') || '{}');
-      const wh   = JSON.parse(localStorage.getItem('water-history') || '{}');
-      const goal = parseInt(localStorage.getItem('calorie-goal') || '1800');
-      const rows = Object.entries(hist).filter(([, m]) => m && m.length > 0).map(([dk, meals]) => {
-        const t = meals.reduce((acc, m) => ({
-          kcal: acc.kcal + (m.kcal||0), protein: acc.protein + (m.protein||0),
-          carbs: acc.carbs + (m.carbs||0), fat: acc.fat + (m.fat||0), fiber: acc.fiber + (m.fiber||0),
-        }), { kcal:0, protein:0, carbs:0, fat:0, fiber:0 });
-        return {
-          user_id: NUTRITION_USER_ID, date: dk,
-          total_kcal: Math.round(t.kcal), protein_g: Math.round(t.protein*10)/10,
-          carbs_g: Math.round(t.carbs*10)/10, fat_g: Math.round(t.fat*10)/10,
-          fiber_g: Math.round(t.fiber*10)/10, water_ml: wh[dk]||0,
-          kcal_goal: goal,
-          meals: meals.map(m => ({ name: m.name||m.text, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber })),
-          updated_at: new Date().toISOString(),
-        };
-      });
-      for (let i = 0; i < rows.length; i += 50) {
-        await sbClient.from('nutrition_log').upsert(rows.slice(i, i+50), { onConflict: 'user_id,date' });
-      }
+      await pullNutritionFromSupabase();
+      const count = await fullPushNutrition();
       const today = toDateKey(new Date());
       localStorage.setItem('supabase-last-full-sync', today);
       setLastNutritionSyncAt(today);
       setNutritionSyncStatus('ok');
-      console.log(`[NutrSync] Full sync: ${rows.length} days uploaded`);
+      console.log(`[NutrSync] Full sync: ${count} days uploaded`);
     } catch (e) {
       console.warn('[NutrSync] Full sync error:', e.message);
       setNutritionSyncStatus('error');
     }
     setTimeout(() => setNutritionSyncStatus(null), 3000);
   };
+
+  // Pull, wenn der Tab wieder sichtbar wird (z.B. App auf dem Handy geöffnet,
+  // nachdem auf dem Desktop erfasst wurde) – gedrosselt auf 1×/Minute.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastPullRef.current > 60 * 1000) {
+        pullNutritionFromSupabase();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
 
   // ── Body sync ────────────────────────────────────────────────────────────────
   const syncBodyData = async (silent = false) => {
@@ -1112,18 +1188,22 @@ const KalorienTracker = () => {
     }
     setHistory(cleaned);
     localStorage.setItem('history-data', JSON.stringify(cleaned));
-    // Auto-sync today's entry to Supabase (best-effort, no await)
+    // Tages-Stempel setzen + Auto-Sync zu Supabase (best-effort, no await)
+    const ts = new Date().toISOString();
+    setDayTs(selectedDate, ts);
     const meals = cleaned[selectedDate] || [];
     const water = waterHistory[selectedDate] || 0;
-    syncNutritionDayToSupabase(selectedDate, meals, water, calorieGoal);
+    syncNutritionDayToSupabase(selectedDate, meals, water, calorieGoal, ts);
   };
 
   const saveWater = (newWaterHistory) => {
     setWaterHistory(newWaterHistory);
     localStorage.setItem('water-history', JSON.stringify(newWaterHistory));
-    // Auto-sync water update for the current day
+    // Tages-Stempel setzen + Auto-Sync des aktuellen Tags
+    const ts = new Date().toISOString();
+    setDayTs(selectedDate, ts);
     const meals = history[selectedDate] || [];
-    syncNutritionDayToSupabase(selectedDate, meals, newWaterHistory[selectedDate] || 0, calorieGoal);
+    syncNutritionDayToSupabase(selectedDate, meals, newWaterHistory[selectedDate] || 0, calorieGoal, ts);
   };
 
   const saveCalorieGoal = (goal) => {
