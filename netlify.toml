@@ -27,6 +27,9 @@
 [functions."analyze-body-photo"]
   timeout = 26
 
+[functions."analyze-food-photo"]
+  timeout = 26
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
