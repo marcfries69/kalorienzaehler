@@ -2492,7 +2492,7 @@ ${trainingDays.filter(d => {
                     const hc = healthColors(meal.healthScore);
                     return (
                       <div
-                        key={meal.id}
+                        key={meal.id ?? `meal-${index}`}
                         className="meal-card bg-white rounded-xl shadow-sm hover:shadow-md transition-all border border-slate-100"
                         style={{ animationDelay: `${index * 0.05}s` }}
                       >
@@ -2943,7 +2943,7 @@ ${trainingDays.filter(d => {
                       </h3>
                       <span className="text-xs text-slate-400">Ø {stats.avg.sport} kcal/Tag</span>
                     </div>
-                    <p className="text-xs text-slate-400 mb-4">verbrannte Kalorien laut Strava (inkl. −20% Korrektur)</p>
+                    <p className="text-xs text-slate-400 mb-4">verbrannte Kalorien laut Strava (inkl. −{rules.stravaDeflation}% Korrektur)</p>
 
                     <div className="flex items-end gap-1" style={{ height: '90px' }}>
                       {(() => {
