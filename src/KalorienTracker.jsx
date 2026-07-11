@@ -217,6 +217,7 @@ const KalorienTracker = () => {
   const [showPdfMenu, setShowPdfMenu] = useState(false);
   const [pdfFrom, setPdfFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 13); return toDateKey(d); });
   const [pdfTo, setPdfTo]     = useState(() => toDateKey(new Date()));
+  const [pdfDetailed, setPdfDetailed] = useState(false); // alle Mahlzeiten im Detail anhängen
   const [coachAnalysis, setCoachAnalysis] = useState(null);
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [chatMessages, setChatMessages] = useState([]); // {role:'user'|'assistant', content:string}
@@ -347,7 +348,7 @@ const KalorienTracker = () => {
 
   // ── PDF Export (frei wählbarer Zeitraum, tagegenau) ───────────────────────
   // Aufruf entweder mit Tagesanzahl (Presets) oder mit { from, to } Datums-Keys.
-  const exportPDF = (arg = 14) => {
+  const exportPDF = (arg = 14, includeMeals = false) => {
     const exportDate = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
     // ── Zeitraum bestimmen ────────────────────────────────────────────────────
@@ -550,13 +551,82 @@ const KalorienTracker = () => {
     docL.setFillColor(168, 85, 247);  docL.rect(150, ly-3, 5, 4, 'F'); docL.text(`Fett: Ø ${Math.round(avg.fat/n)}g`, 157, ly);
     docL.setFillColor(22, 163, 74);   docL.rect(220, ly-3, 5, 4, 'F'); docL.text(`Sport: Ø ${Math.round(avg.sport/n)} kcal/Tag`, 227, ly);
 
-    // Footer
-    const pageHL = docL.internal.pageSize.getHeight();
-    docL.setFontSize(7);
-    docL.setTextColor(148, 163, 184);
-    docL.text('Kalorienmonitor · kalorienmonitor.netlify.app', pageWL / 2, pageHL - 5, { align: 'center' });
+    // ── Detail-Anhang: alle Mahlzeiten pro Tag ────────────────────────────────
+    if (includeMeals) {
+      const detailRows = [];
+      days14.forEach(dateKey => {
+        const meals = history[dateKey] || [];
+        if (meals.length === 0) return;
+        const dayLabel = new Date(dateKey + 'T12:00:00').toLocaleDateString('de-DE',
+          { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+        const dayKcal = Math.round(meals.reduce((s, m) => s + (m.kcal || 0), 0));
+        // Tages-Header-Zeile (volle Breite)
+        detailRows.push([{
+          content: `${dayLabel}   ·   ${dayKcal} kcal gesamt`,
+          colSpan: 8,
+          styles: { fillColor: [224, 242, 241], textColor: [15, 118, 110], fontStyle: 'bold', fontSize: 8 },
+        }]);
+        meals.forEach(m => {
+          const comps = Array.isArray(m.components) && m.components.length > 0
+            ? '\n' + m.components.map(c =>
+                `   – ${c.name}${c.amount ? ` (${c.amount})` : ''}${c.kcal ? ` · ${Math.round(c.kcal)} kcal` : ''}`
+              ).join('\n')
+            : '';
+          const name = m.isAutoCorrection
+            ? 'Auto-Korrektur (Tag nicht erfasst, geschätzt)'
+            : `${m.name || m.text || '–'}${comps}`;
+          detailRows.push([
+            m.time || '–',
+            name,
+            Math.round(m.kcal    || 0) || '–',
+            Math.round(m.protein || 0) || '–',
+            Math.round(m.carbs   || 0) || '–',
+            Math.round(m.fat     || 0) || '–',
+            Math.round(m.fiber   || 0) || '–',
+            m.healthScore != null ? `${m.healthScore}/6` : '–',
+          ]);
+        });
+      });
 
-    const filename = `ernaehrung-report-${startKey}_bis_${endKey}.pdf`;
+      if (detailRows.length > 0) {
+        docL.addPage();
+        docL.setFont('helvetica', 'bold');
+        docL.setFontSize(12);
+        docL.setTextColor(30, 41, 59);
+        docL.text(`Mahlzeiten im Detail (${rangeLabel})`, 14, 14);
+
+        autoTable(docL, {
+          startY: 19,
+          head: [['Zeit', 'Mahlzeit & Bestandteile', 'kcal', 'Protein\n(g)', 'Carbs\n(g)', 'Fett\n(g)', 'Faser\n(g)', 'Health\nScore']],
+          body: detailRows,
+          styles:      { fontSize: 7, cellPadding: 1.8, valign: 'top' },
+          headStyles:  { fillColor: [20, 184, 166], textColor: 255, fontStyle: 'bold', halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 14 },
+            1: { cellWidth: 150 },
+            2: { cellWidth: 14, halign: 'right' },
+            3: { cellWidth: 16, halign: 'right' },
+            4: { cellWidth: 14, halign: 'right' },
+            5: { cellWidth: 14, halign: 'right' },
+            6: { cellWidth: 14, halign: 'right' },
+            7: { cellWidth: 15, halign: 'center' },
+          },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+        });
+      }
+    }
+
+    // Footer auf jeder Seite
+    const pageHL = docL.internal.pageSize.getHeight();
+    const pageCount = docL.internal.getNumberOfPages();
+    for (let p = 1; p <= pageCount; p++) {
+      docL.setPage(p);
+      docL.setFontSize(7);
+      docL.setTextColor(148, 163, 184);
+      docL.text(`Kalorienmonitor · kalorienmonitor.netlify.app${pageCount > 1 ? `  ·  Seite ${p}/${pageCount}` : ''}`, pageWL / 2, pageHL - 5, { align: 'center' });
+    }
+
+    const filename = `ernaehrung-report-${startKey}_bis_${endKey}${includeMeals ? '-detail' : ''}.pdf`;
     docL.save(filename);
   };
 
@@ -2684,7 +2754,21 @@ ${trainingDays.filter(d => {
                   {showPdfMenu && (
                     <div className="absolute right-0 mt-1 w-60 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden z-10">
                       {/* Schnellauswahl */}
-                      <p className="px-3 pt-2.5 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wide">Schnellauswahl</p>
+                      {/* Detail-Option (gilt für alle Exporte) */}
+                      <label className="flex items-start gap-2 px-3 pt-2.5 pb-2 cursor-pointer border-b border-slate-100 hover:bg-teal-50/50 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={pdfDetailed}
+                          onChange={e => setPdfDetailed(e.target.checked)}
+                          className="mt-0.5 accent-teal-500"
+                        />
+                        <span>
+                          <span className="block text-xs font-semibold text-slate-700">Alle Mahlzeiten im Detail</span>
+                          <span className="block text-[10px] text-slate-400 leading-tight">Anhang mit jeder Mahlzeit inkl. Bestandteilen, Makros & Health Score</span>
+                        </span>
+                      </label>
+
+                      <p className="px-3 pt-2 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wide">Schnellauswahl</p>
                       {[
                         { days: 14, label: '14 Tage' },
                         { days: 28, label: '4 Wochen' },
@@ -2692,7 +2776,7 @@ ${trainingDays.filter(d => {
                       ].map(opt => (
                         <button
                           key={opt.days}
-                          onClick={() => { exportPDF(opt.days); setShowPdfMenu(false); }}
+                          onClick={() => { exportPDF(opt.days, pdfDetailed); setShowPdfMenu(false); }}
                           className="w-full text-left px-3 py-2 text-xs font-medium text-slate-700 hover:bg-teal-50 transition-colors"
                         >
                           {opt.label}
@@ -2720,7 +2804,7 @@ ${trainingDays.filter(d => {
                           className="w-full mb-2.5 px-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-400"
                         />
                         <button
-                          onClick={() => { exportPDF({ from: pdfFrom, to: pdfTo }); setShowPdfMenu(false); }}
+                          onClick={() => { exportPDF({ from: pdfFrom, to: pdfTo }, pdfDetailed); setShowPdfMenu(false); }}
                           disabled={!pdfFrom || !pdfTo}
                           className="w-full py-1.5 bg-teal-500 hover:bg-teal-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition-colors"
                         >
