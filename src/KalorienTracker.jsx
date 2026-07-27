@@ -168,6 +168,10 @@ const KalorienTracker = () => {
 
   const [history, setHistory] = useState({});
   const [waterHistory, setWaterHistory] = useState({});
+  // Wird erst true, nachdem der initiale Supabase-Pull durchgelaufen ist – der
+  // Auto-Backfill-Effekt (unten) darf vergangene Tage erst danach bewerten.
+  const initialPullDoneRef = useRef(false);
+  const [pullTick, setPullTick] = useState(0);
   const [selectedDate, setSelectedDate] = useState(() => toDateKey(new Date()));
   const [activeTab, setActiveTab] = useState('day');
   const [monthOffset, setMonthOffset] = useState(0); // 0 = aktueller Monat, -1 = Vormonat, ...
@@ -704,6 +708,13 @@ const KalorienTracker = () => {
             console.log(`[NutrSync] Auto sync on load: ${count} days pushed`);
           }
         } catch (e) { console.warn('[NutrSync] Auto sync error:', e.message); }
+        finally {
+          // Erst ab jetzt darf der Auto-Backfill (unten) vergangene Tage bewerten –
+          // vorher hat er nur den lokalen Vor-Pull-Stand und würde echte, aber noch
+          // nicht heruntergeladene Mahlzeiten fälschlich als "nicht erfasst" markieren.
+          initialPullDoneRef.current = true;
+          setPullTick(t => t + 1);
+        }
       })();
     } catch (e) {
       console.error('Ladefehler:', e);
@@ -810,10 +821,16 @@ const KalorienTracker = () => {
   };
 
   // Per-day push: nach jedem saveHistory / saveWater (auch leere Tage → Löschung propagiert)
+  // Reine Platzhalter-Tage (nur Auto-Correction, keine echte Mahlzeit) werden nie hochgeladen –
+  // sonst könnte ein lokaler Rate-Eintrag (z.B. vor einem abgeschlossenen Pull) eine bereits
+  // synchronisierte echte Mahlzeit in Supabase überschreiben.
   const syncNutritionDayToSupabase = async (dateKey, meals, waterMl, goal, ts) => {
+    const allMeals  = meals || [];
+    const realMeals = allMeals.filter(m => !m.isAutoCorrection);
+    if (realMeals.length === 0 && allMeals.length > 0) return;
     try {
       await sbClient.from('nutrition_log').upsert(
-        buildNutritionRow(dateKey, meals, waterMl, goal, ts || new Date().toISOString()),
+        buildNutritionRow(dateKey, realMeals, waterMl, goal, ts || new Date().toISOString()),
         { onConflict: 'user_id,date' }
       );
     } catch (e) { console.warn('[NutrSync] Day sync error:', e.message); }
@@ -843,7 +860,10 @@ const KalorienTracker = () => {
         const d = row.date;
         const remoteTs = row.updated_at || '';
         const localTs  = tsMap[d];
-        const hasLocal = Array.isArray(hist[d]) && hist[d].length > 0;
+        // Ein lokaler Auto-Correction-Platzhalter zählt NICHT als "echte lokale Daten" –
+        // sonst maskiert er echte, noch nicht heruntergeladene Remote-Mahlzeiten und
+        // verhindert deren Übernahme (Ursache eines schweren Datenverlust-Bugs).
+        const hasLocal = Array.isArray(hist[d]) && hist[d].some(m => !m.isAutoCorrection);
         const remoteWins = localTs ? remoteTs > localTs : !hasLocal;
         if (!remoteWins) continue;
 
@@ -882,9 +902,11 @@ const KalorienTracker = () => {
     const legacyTs = new Date().toISOString();
     const rows = Object.entries(hist)
       .filter(([, m]) => m && m.length > 0)
+      // Reine Platzhalter-Tage nie hochladen – siehe syncNutritionDayToSupabase
+      .filter(([, m]) => m.some(x => !x.isAutoCorrection))
       .map(([dk, meals]) => {
         if (!tsMap[dk]) setDayTs(dk, legacyTs); // Erstmigration: Stempel nachziehen
-        return buildNutritionRow(dk, meals, wh[dk] || 0, goal, tsMap[dk]);
+        return buildNutritionRow(dk, meals.filter(x => !x.isAutoCorrection), wh[dk] || 0, goal, tsMap[dk]);
       });
     for (let i = 0; i < rows.length; i += 50) {
       await sbClient.from('nutrition_log').upsert(rows.slice(i, i + 50), { onConflict: 'user_id,date' });
@@ -1320,6 +1342,11 @@ const KalorienTracker = () => {
   // Läuft auch ohne kiResult (Fallback auf calorieGoal/1800), wird erneut ausgeführt
   // wenn kiResult verfügbar wird (z.B. nach ki-adjust API-Aufruf).
   useEffect(() => {
+    // Vor dem ersten Supabase-Pull hat localStorage evtl. noch keine der echten,
+    // synchronisierten Mahlzeiten vergangener Tage – ohne diese Sperre würde das
+    // hier fälschlich "nicht erfasst" für Tage mit echten Remote-Daten annehmen.
+    if (!initialPullDoneRef.current) return;
+
     const restBase  = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase;
 
     let freshHistory;
@@ -1373,7 +1400,7 @@ const KalorienTracker = () => {
       localStorage.setItem('history-data', JSON.stringify(freshHistory));
       setHistory(freshHistory);
     }
-  }, [kiResult, trainingDays, calorieGoal, rules]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kiResult, trainingDays, calorieGoal, rules, pullTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // ── Water ────────────────────────────────────────────────────────────────────
