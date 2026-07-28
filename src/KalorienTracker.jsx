@@ -808,12 +808,14 @@ const KalorienTracker = () => {
     const totals = (meals || []).reduce((acc, m) => ({
       kcal: acc.kcal + (m.kcal || 0), protein: acc.protein + (m.protein || 0),
       carbs: acc.carbs + (m.carbs || 0), fat: acc.fat + (m.fat || 0), fiber: acc.fiber + (m.fiber || 0),
-    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+      caffeine: acc.caffeine + (m.caffeine || 0),
+    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0 });
     return {
       user_id: NUTRITION_USER_ID, date: dateKey,
       total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
       carbs_g: Math.round(totals.carbs * 10) / 10, fat_g: Math.round(totals.fat * 10) / 10,
       fiber_g: Math.round(totals.fiber * 10) / 10, water_ml: waterMl || 0,
+      caffeine_mg: Math.round(totals.caffeine),
       kcal_goal: goal,
       meals: meals || [],   // volle Objekte – Grundlage für Multi-Device-Sync
       updated_at: ts,
@@ -2747,6 +2749,9 @@ ${trainingDays.filter(d => {
                             <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium mono">P: {Math.round(meal.protein)}g</span>
                             <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium mono">K: {Math.round(meal.carbs)}g</span>
                             <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono">F: {Math.round(meal.fat)}g</span>
+                            {meal.caffeine > 0 && (
+                              <span className="px-3 py-1 rounded-full bg-stone-200 text-stone-700 text-xs font-medium mono">☕ {Math.round(meal.caffeine)}mg</span>
+                            )}
                           </div>
                         </div>
 
