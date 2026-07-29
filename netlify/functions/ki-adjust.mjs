@@ -33,7 +33,7 @@ export default async (req) => {
     } = await req.json();
 
     // Konfigurierbare Regeln (Frontend-Einstellungen), mit robusten Defaults
-    const kcalRestBase    = rules.kcalRestBase    ?? 1800;
+    const kcalRestBase    = rules.kcalRestBase    ?? 2200;
     const minDaily         = rules.kcalMinDaily    ?? 2200;
     const maintenanceBase = rules.maintenanceBase ?? 2400;
     const macroRest  = rules.macroRest  ?? { protein: 150, carbs: 150, fat: 66 };

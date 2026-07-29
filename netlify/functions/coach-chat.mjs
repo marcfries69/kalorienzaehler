@@ -26,7 +26,7 @@ export default async (req) => {
       rules            = {},
     } = context;
 
-    const kcalRestBase    = rules.kcalRestBase    ?? 1800;
+    const kcalRestBase    = rules.kcalRestBase    ?? 2200;
     const minDaily         = rules.kcalMinDaily    ?? 2200;
     const maintenanceBase = rules.maintenanceBase ?? 2400;
     const stravaDeflation = rules.stravaDeflation ?? 25;
