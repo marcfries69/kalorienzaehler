@@ -109,7 +109,6 @@ export default async (req) => {
     // rules.stravaDeflation ist der ABZUG in % (z.B. 25 = "-25%") – der Multiplikator
     // ist daher der verbleibende Anteil (100-25)/100 = 0.75, nicht 25/100!
     const stravaDeflation    = (100 - (rules.stravaDeflation ?? 25)) / 100;
-    const useKjForPowerRides = rules.useKjForPowerRides ?? true;
 
     // ── 1. Get fresh Strava access token ──────────────────────────────────────
     const accessToken = await refreshAccessToken();
@@ -161,18 +160,18 @@ export default async (req) => {
       const typeLow = type.toLowerCase();
       const isRide  = typeLow.includes('ride') || typeLow.includes('cycling') || typeLow.includes('virtual');
 
-      // Einzige Regel: pauschale Überschätzungskorrektur (-25%), oder kJ-Wert
-      // (1 kJ ≈ 1 kcal) falls vorhanden und niedriger – keine weiteren Anteils-Regeln.
-      let calories = Math.round(rawCalories * stravaDeflation);
-      let caloriesSource = reportedCal > 10 ? 'strava' : 'estimated';
-
+      // Regel: liegt ein kJ-Wert vor (Power-Meter-Ride), wird dieser IMMER 1:1 als
+      // kcal angesetzt, ohne Abzug – kJ ist eine direkte Arbeitsmessung, keine
+      // Schätzung, die eine Überschätzungskorrektur bräuchte. Nur wenn kein kJ-Wert
+      // vorliegt, greift die pauschale Strava-Überschätzungskorrektur.
       const kj = a.kilojoules || 0;
-      if (useKjForPowerRides && isRide && kj > 0) {
-        const kjAsKcal = Math.round(kj);
-        if (kjAsKcal < calories) {
-          calories = kjAsKcal;
-          caloriesSource = 'kilojoules';
-        }
+      let calories, caloriesSource;
+      if (isRide && kj > 0) {
+        calories = Math.round(kj);
+        caloriesSource = 'kilojoules';
+      } else {
+        calories = Math.round(rawCalories * stravaDeflation);
+        caloriesSource = reportedCal > 10 ? 'strava' : 'estimated';
       }
 
       // Deduplizierung: gleicher Name + ähnliche Dauer (±10 min) → Duplikat überspringen

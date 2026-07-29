@@ -100,7 +100,6 @@ export default async (req) => {
     // rules.stravaDeflation ist der ABZUG in % (z.B. 25 = "-25%") – der Multiplikator
     // ist daher der verbleibende Anteil (100-25)/100 = 0.75, nicht 25/100!
     const stravaDeflation    = (100 - (rules.stravaDeflation ?? 25)) / 100;
-    const useKjForPowerRides = rules.useKjForPowerRides ?? true;
 
     const accessToken = await refreshAccessToken();
 
@@ -156,12 +155,13 @@ export default async (req) => {
 
     const movingMinutes = Math.round((ride.moving_time || 0) / 60);
 
-    // Leistungsmesser-Check: kJ-Arbeit (1 kJ ≈ 1 kcal) als zuverlässigste Größe –
-    // nimm den niedrigeren Wert aus (korrigierter Strava-Schätzung, kJ).
-    let rideCalories = ride.calories ? Math.round(ride.calories * stravaDeflation) : null;
-    if (useKjForPowerRides && ride.kilojoules > 0) {
-      const kjAsKcal = Math.round(ride.kilojoules);
-      if (rideCalories === null || kjAsKcal < rideCalories) rideCalories = kjAsKcal;
+    // Leistungsmesser-Check: liegt kJ-Arbeit vor (1 kJ ≈ 1 kcal), ist das eine direkte
+    // Arbeitsmessung und wird immer 1:1 ohne Abzug angesetzt – keine Vergleichslogik.
+    let rideCalories;
+    if (ride.kilojoules > 0) {
+      rideCalories = Math.round(ride.kilojoules);
+    } else {
+      rideCalories = ride.calories ? Math.round(ride.calories * stravaDeflation) : null;
     }
 
     return Response.json({

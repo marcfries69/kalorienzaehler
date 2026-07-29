@@ -3,7 +3,7 @@ import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
   Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind,
-  Cloud, CloudOff, Camera, ImagePlus,
+  Cloud, CloudOff, Camera, ImagePlus, Moon, Thermometer, Search, Info, HeartPulse,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -107,11 +107,10 @@ const compressImage = (file, maxDim = 1024, quality = 0.75) => new Promise((reso
 const RULES_STORAGE_KEY = 'app-rules';
 const DEFAULT_RULES = {
   kcalRestBase:    1800, // Basis Ruhetag/Sporttag (vor Floor/Sport-Zuschlag)
-  kcalMinDaily:    1900, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
-  maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
+  kcalMinDaily:    2200, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
+  maintenanceBase: 2400, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
   referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
-  stravaDeflation:  25,  // % Abzug auf alle Strava-Kalorien (Überschätzungskorrektur)
-  useKjForPowerRides: true,   // kJ-Vergleich (Min von Strava-Korrektur und kJ) bei Power-Rides
+  stravaDeflation:  25,  // % Abzug auf Strava-Kalorien ohne kJ-Wert (Überschätzungskorrektur)
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
   macroCycle: { protein: 150, carbs: 300, fat: 85 }, // Zone2 ≥90min / VO2max-Rad
@@ -126,6 +125,12 @@ const loadRules = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(RULES_STORAGE_KEY) || 'null');
     if (!saved) return { ...DEFAULT_RULES };
+    // Migration: alte, nie manuell angepasste Erhaltungs-/Untergrenze-Werte (2100/1900)
+    // auf die neue Basis (2400/2200) heben – nur wenn sie noch exakt den alten Defaults
+    // entsprechen, damit eine bewusst andere Nutzer-Einstellung nicht überschrieben wird.
+    if (saved.maintenanceBase === 2100) saved.maintenanceBase = DEFAULT_RULES.maintenanceBase;
+    if (saved.kcalMinDaily === 1900) saved.kcalMinDaily = DEFAULT_RULES.kcalMinDaily;
+    delete saved.useKjForPowerRides; // Regel jetzt fest: kJ immer 1:1, kein Vergleich mehr
     return {
       ...DEFAULT_RULES,
       ...saved,
@@ -241,6 +246,18 @@ const KalorienTracker = () => {
   const [loadingRideSync, setLoadingRideSync] = useState(false);
   const [syncedRide, setSyncedRide] = useState(null); // zuletzt synchronisierte Strava-Einheit
   const [claudeCopied, setClaudeCopied] = useState(null); // 'training' | 'data' | null
+  // ── Ernährung × Schlaf/Recovery ──────────────────────────────────────────
+  const [sleepQuick, setSleepQuick] = useState(null);
+  const [loadingSleepQuick, setLoadingSleepQuick] = useState(false);
+  const [sleepQuickError, setSleepQuickError] = useState(null);
+  const [sickDates, setSickDates] = useState([]);
+  const [sickNotes, setSickNotes] = useState({});
+  const [sickDraftDate, setSickDraftDate] = useState(() => toDateKey(new Date()));
+  const [sickDraftNote, setSickDraftNote] = useState('');
+  const [savingSick, setSavingSick] = useState(false);
+  const [deepStatus, setDeepStatus] = useState(null); // null | 'running' | 'done' | 'error'
+  const [deepResult, setDeepResult] = useState(null);
+  const [deepError, setDeepError] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [syncError, setSyncError] = useState(null);
   const [trainingSyncError, setTrainingSyncError] = useState(null);
@@ -336,8 +353,8 @@ const KalorienTracker = () => {
   const capDailyGoal = (kcal) => Math.max(Math.round(kcal || 0), rules.kcalMinDaily);
 
   // ── Auto-computed effective daily goal ───────────────────────────────────────
-  // Formel: Ruhetag immer 1900 kcal. Sporttag: Basis 1800 kcal + volle (Stufe-1-korrigierte)
-  // Strava-Kalorien. Kein Eat-back-Tier mehr – Defizit bleibt dadurch konstant ~300 kcal.
+  // Formel: Ruhetag immer kcalMinDaily (2200) kcal. Sporttag: Basis 1800 kcal + volle
+  // (kJ-priorisierte) Strava-Kalorien. Kein Eat-back-Tier mehr.
   const effectiveTodayGoal = useMemo(() => {
     const todayTraining = trainingDays.find(d => d.date === todayKey);
     const restBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
@@ -665,8 +682,9 @@ const KalorienTracker = () => {
 
       const savedGoal = localStorage.getItem('calorie-goal');
       const parsedGoal = parseInt(savedGoal);
-      // Migrate old base values to current base (1800)
-      if ([2200, 2100, 2000, 1950, 1900].includes(parsedGoal)) {
+      // Migrate old base values to current base (1800) — 2200 bleibt ausgenommen,
+      // das ist seit der Erhaltungs-Anhebung die neue reguläre Untergrenze (kcalMinDaily).
+      if ([2100, 2000, 1950, 1900].includes(parsedGoal)) {
         localStorage.setItem('calorie-goal', '1800');
         setCalorieGoal(1800);
       } else if (savedGoal && !isNaN(parsedGoal) && parsedGoal > 0) {
@@ -1850,7 +1868,7 @@ const KalorienTracker = () => {
       const kcalDisplay  = useGoal ? dayGoal : kcalLogged;
       const sportKcal    = training?.totalCalories || 0;
       const net          = Math.round(kcalDisplay - sportKcal);
-      // Erhaltungskalorien = 2100 (tdeeNoSport) + sportKcal = tdeeNoSport - net (äquivalent umgestellt)
+      // Erhaltungskalorien = tdeeNoSport (maintenanceBase) + sportKcal = tdeeNoSport - net (äquivalent umgestellt)
       const erhaltung    = tdeeNoSport + sportKcal;
       const deficit      = Math.round(tdeeNoSport - net);
       const plannedDeficit = Math.round(erhaltung - dayGoal);
@@ -1907,6 +1925,78 @@ const KalorienTracker = () => {
       plannedDeficitSum,
     };
   };
+
+  // ── Ernährung × Schlaf/Recovery ──────────────────────────────────────────────
+  const loadSickDays = async () => {
+    const { data } = await sbClient.from('sick_days').select('date, note').order('date', { ascending: false });
+    setSickDates((data || []).map(r => r.date));
+    setSickNotes(Object.fromEntries((data || []).map(r => [r.date, r.note])));
+    return (data || []).map(r => r.date);
+  };
+
+  const runSleepQuick = async () => {
+    setLoadingSleepQuick(true); setSleepQuickError(null);
+    try {
+      const res = await fetch('/.netlify/functions/nutrition-sleep-quick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Fehler ${res.status}`); }
+      setSleepQuick(await res.json());
+    } catch (err) { setSleepQuickError(err.message); }
+    setLoadingSleepQuick(false);
+  };
+
+  const addSickDay = async () => {
+    if (!sickDraftDate) return;
+    setSavingSick(true);
+    try {
+      await sbClient.from('sick_days').upsert(
+        { user_id: NUTRITION_USER_ID, date: sickDraftDate, note: sickDraftNote || null },
+        { onConflict: 'user_id,date' }
+      );
+      setSickDraftNote('');
+      await loadSickDays();
+      runSleepQuick();
+    } finally { setSavingSick(false); }
+  };
+
+  const removeSickDay = async (date) => {
+    await sbClient.from('sick_days').delete().eq('user_id', NUTRITION_USER_ID).eq('date', date);
+    await loadSickDays();
+    runSleepQuick();
+  };
+
+  const startDeepSleepAnalysis = async () => {
+    setDeepStatus('running'); setDeepError(null); setDeepResult(null);
+    try {
+      const jobId = crypto.randomUUID();
+      await sbClient.from('analysis_jobs').insert({
+        id: jobId, user_id: NUTRITION_USER_ID, status: 'pending',
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      });
+      const trigger = await fetch('/.netlify/functions/correlate-nutrition-sleep-background', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }),
+      });
+      if (!trigger.ok && trigger.status !== 202) throw new Error(`Server-Fehler (${trigger.status})`);
+
+      const started = Date.now();
+      while (Date.now() - started < 5 * 60 * 1000) {
+        await new Promise(r => setTimeout(r, 2500));
+        const { data: job } = await sbClient.from('analysis_jobs').select('status, result, error').eq('id', jobId).single();
+        if (!job || job.status === 'pending' || job.status === 'processing') continue;
+        if (job.status === 'error') throw new Error(job.error || 'Analyse fehlgeschlagen');
+        if (job.status === 'done') { setDeepResult(job.result); setDeepStatus('done'); return; }
+      }
+      throw new Error('Zeitüberschreitung — die Analyse dauert ungewöhnlich lange.');
+    } catch (err) {
+      setDeepError(err.message); setDeepStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'schlaf' && !sleepQuick && !loadingSleepQuick) {
+      loadSickDays().then(() => runSleepQuick());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // ── Water UI ─────────────────────────────────────────────────────────────────
   const waterPct = Math.min((currentWater / 3) * 100, 100);
@@ -2137,6 +2227,7 @@ ${trainingDays.filter(d => {
             { key: 'month', icon: <TrendingUp className="w-4 h-4" />, label: 'Monat' },
             { key: 'coach', icon: <Brain      className="w-4 h-4" />, label: 'Coach' },
             { key: 'rad',   icon: <Bike       className="w-4 h-4" />, label: 'Rad'   },
+            { key: 'schlaf', icon: <Moon      className="w-4 h-4" />, label: 'Schlaf' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -2229,7 +2320,7 @@ ${trainingDays.filter(d => {
 
             {/* Summary card */}
             {(() => {
-              // Formel: Ruhetag immer 1900 kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien (inkl. Abschlag)
+              // Formel: Ruhetag immer kcalMinDaily (2200) kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien
               const dayStrava = trainingDays.find(d => d.date === selectedDate);
               const restBase = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
               const effectiveGoal = isToday ? effectiveTodayGoal : capDailyGoal(restBase + sportKcalCredit(dayStrava));
@@ -3082,7 +3173,7 @@ ${trainingDays.filter(d => {
                       <div className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200 rounded-xl p-4">
                         <p className="text-orange-600 text-xs font-semibold uppercase tracking-wide mb-1">Erhaltung</p>
                         <p className="text-2xl font-bold mono text-orange-900">{stats.avg.erhaltung}</p>
-                        <p className="text-xs text-orange-400 mt-1">Ø 2100 + Sport/Tag</p>
+                        <p className="text-xs text-orange-400 mt-1">Ø {rules.maintenanceBase} + Sport/Tag</p>
                       </div>
 
                       {/* Geplantes Defizit – kumuliert + Ø */}
@@ -4596,6 +4687,207 @@ ${trainingDays.filter(d => {
       })()}
 
       {/* ════════════════════════════════════════════════════════════════════════ */}
+      {/* ERNÄHRUNG × SCHLAF/RECOVERY                                               */}
+      {/* ════════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'schlaf' && (
+        <div className="space-y-4">
+          <div className="glass rounded-3xl p-6 shadow-xl">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2 mb-1">
+              <Moon className="w-5 h-5 text-indigo-500" /> Ernährung × Schlaf/Recovery
+            </h2>
+            <p className="text-sm text-slate-400">Wirkt sich die Ernährung eines Tages auf Schlaf und Regeneration am Folgetag aus? (Whoop/Oura, verbunden über Blood Analytics)</p>
+          </div>
+
+          {/* Krankheitstage */}
+          <div className="glass rounded-3xl p-5 shadow-xl">
+            <div className="flex items-center gap-2 mb-3">
+              <Thermometer className="w-4 h-4 text-amber-500" />
+              <h3 className="text-sm font-bold text-slate-700">Krankheitstage</h3>
+              <span className="text-xs text-slate-400">— werden aus allen Korrelationen ausgeschlossen</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <input type="date" value={sickDraftDate} onChange={e => setSickDraftDate(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700" />
+              <input type="text" placeholder="Notiz (optional)" value={sickDraftNote} onChange={e => setSickDraftNote(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700 flex-1 min-w-[140px]" />
+              <button onClick={addSickDay} disabled={savingSick}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+                {savingSick ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                Als krank markieren
+              </button>
+            </div>
+            {sickDates.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {sickDates.map(d => (
+                  <span key={d} className="inline-flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 text-xs px-2.5 py-1 rounded-full">
+                    {new Date(d + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}{sickNotes[d] ? ` · ${sickNotes[d]}` : ''}
+                    <button onClick={() => removeSickDay(d)} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-400">Keine Krankheitstage erfasst.</p>
+            )}
+          </div>
+
+          {/* Quick 30-Tage */}
+          <div className="glass rounded-3xl p-5 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><Sparkles className="w-4 h-4 text-emerald-500" /> Letzte 30 Tage</h3>
+              <button onClick={runSleepQuick} disabled={loadingSleepQuick}
+                className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 disabled:opacity-50">
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingSleepQuick ? 'animate-spin' : ''}`} /> Aktualisieren
+              </button>
+            </div>
+
+            {loadingSleepQuick && !sleepQuick && (
+              <div className="flex items-center gap-2 text-slate-400 text-sm py-6 justify-center">
+                <Loader2 className="w-4 h-4 animate-spin" /> Lade Ernährungs- und Schlafdaten…
+              </div>
+            )}
+            {sleepQuickError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-600 text-sm mb-3">{sleepQuickError}</div>
+            )}
+
+            {sleepQuick && (
+              <>
+                {!sleepQuick.ouraConnected && !sleepQuick.whoopConnected && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 text-xs text-slate-500 flex items-start gap-2">
+                    <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    Weder Oura noch Whoop verbunden — öffne einmal die Blood-Analytics-App und verbinde dort Oura/Whoop im Recovery-Tab, dann erscheinen hier Schlafdaten.
+                  </div>
+                )}
+                <p className="text-xs text-slate-400 mb-3">
+                  {sleepQuick.validCount} von {sleepQuick.pairs.length} Tagen mit vollständigen Daten
+                  {sleepQuick.excludedCount > 0 ? ` · ${sleepQuick.excludedCount} ausgeschlossen (krank / keine Daten)` : ''}
+                </p>
+
+                {sleepQuick.aiSummary && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-4 text-sm text-emerald-800 flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                    <span>{sleepQuick.aiSummary}</span>
+                  </div>
+                )}
+
+                <div className="overflow-x-auto -mx-5 px-5">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-slate-400 border-b border-slate-200">
+                        <th className="text-left py-2 pr-3 font-medium">Tag → Folgetag</th>
+                        <th className="text-right py-2 px-2 font-medium">kcal Δ</th>
+                        <th className="text-right py-2 px-2 font-medium">Carbs</th>
+                        <th className="text-right py-2 px-2 font-medium">Koffein</th>
+                        <th className="text-right py-2 px-2 font-medium border-l border-slate-200">HRV</th>
+                        <th className="text-right py-2 px-2 font-medium">Recovery</th>
+                        <th className="text-right py-2 px-2 font-medium">RHR</th>
+                        <th className="text-left py-2 pl-3 font-medium border-l border-slate-200">KI-Hinweis</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sleepQuick.pairs.map(p => {
+                        const hint = sleepQuick.aiHints?.[p.nutritionDate];
+                        return (
+                          <tr key={p.nutritionDate} className={`border-b border-slate-100 ${p.excluded ? 'opacity-40' : ''}`}>
+                            <td className="py-1.5 pr-3 text-slate-600 whitespace-nowrap">
+                              {new Date(p.nutritionDate + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} → {new Date(p.sleepDate + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
+                            </td>
+                            {p.excluded ? (
+                              <td colSpan={7} className="py-1.5 px-2 text-slate-400 italic">{p.excludeReason}</td>
+                            ) : (
+                              <>
+                                <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.kcalDelta == null ? '–' : (p.nutrition.kcalDelta > 0 ? `+${p.nutrition.kcalDelta}` : p.nutrition.kcalDelta)}</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.carbsG ?? '–'}g</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.caffeineMg ?? '–'}mg</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600 border-l border-slate-100">{p.sleep?.hrv ?? '–'}</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600">{p.sleep?.recoveryScore ?? '–'}</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600">{p.sleep?.rhr ?? '–'}</td>
+                                <td className="py-1.5 pl-3 text-emerald-600 border-l border-slate-100">{hint || ''}</td>
+                              </>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {sleepQuick.correlations?.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Erste statistische Zusammenhänge</h4>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {sleepQuick.correlations.slice(0, 6).map((c, i) => (
+                        <div key={i} className="bg-slate-50 rounded-lg border border-slate-200 p-2.5 text-xs flex items-center justify-between">
+                          <span className="text-slate-600">{c.nutritionLabel} ↔ {c.sleepLabel}</span>
+                          <span className={`font-mono font-semibold ${Math.abs(c.r) >= 0.3 ? 'text-emerald-600' : 'text-slate-400'}`}>r={c.r}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Tiefenanalyse */}
+          <div className="glass rounded-3xl p-5 shadow-xl">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><HeartPulse className="w-4 h-4 text-violet-500" /> Tiefenanalyse (gesamte Historie)</h3>
+              <button onClick={startDeepSleepAnalysis} disabled={deepStatus === 'running'}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+                {deepStatus === 'running' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                {deepStatus === 'running' ? 'Analysiere…' : 'Tiefenanalyse starten'}
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 mb-3">Untersucht die komplette Historie auf echte statistische Muster (Korrelationen + Gruppenvergleiche), interpretiert von Claude. Dauert bis zu einigen Minuten.</p>
+
+            {deepError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-600 text-sm mb-3">{deepError}</div>
+            )}
+
+            {deepResult && (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-400">
+                  {deepResult.coverage?.validPairs} von {deepResult.coverage?.totalPairs} Tagen genutzt
+                  {deepResult.coverage?.dateRange ? ` (${deepResult.coverage.dateRange[0]} – ${deepResult.coverage.dateRange[1]})` : ''}
+                </p>
+                {deepResult.analysis?.zusammenfassung && (
+                  <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-sm text-violet-800">{deepResult.analysis.zusammenfassung}</div>
+                )}
+                {deepResult.analysis?.muster?.length > 0 && (
+                  <div className="space-y-2">
+                    {deepResult.analysis.muster.map((m, i) => (
+                      <div key={i} className="bg-slate-50 rounded-lg border border-slate-200 p-3">
+                        <span className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded ${
+                          m.staerke === 'stark' ? 'bg-emerald-100 text-emerald-700' :
+                          m.staerke === 'moderat' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-500'
+                        }`}>{m.staerke}</span>
+                        <p className="text-sm text-slate-700 mt-1.5 mb-1">{m.beschreibung}</p>
+                        {m.evidenz && <p className="text-xs text-slate-400 font-mono">{m.evidenz}</p>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {deepResult.analysis?.top_empfehlungen?.length > 0 && (
+                  <div className="space-y-2">
+                    {deepResult.analysis.top_empfehlungen.map((e, i) => (
+                      <div key={i} className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                        <p className="text-sm font-semibold text-emerald-800">{e.titel}</p>
+                        <p className="text-xs text-emerald-700 mt-0.5">{e.beschreibung}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!deepResult && deepStatus !== 'running' && (
+              <p className="text-xs text-slate-400 flex items-center gap-1.5"><Moon className="w-3.5 h-3.5" /> Noch nicht gestartet.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════ */}
       {/* MEAL SUGGESTIONS MODAL                                                    */}
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {showMealsModal && (
@@ -5004,7 +5296,7 @@ ${trainingDays.filter(d => {
               {/* Strava-Korrektur */}
               <div>
                 <h3 className="text-sm font-bold text-slate-700 mb-3">Strava-Korrektur</h3>
-                <p className="text-xs text-slate-400 mb-3">Einzige Regel: pauschaler Abzug, oder kJ-Wert falls vorhanden und niedriger.</p>
+                <p className="text-xs text-slate-400 mb-3">Liegt ein kJ-Wert vor (Power-Meter-Ride), wird dieser immer 1:1 ohne Abzug angesetzt. Nur ohne kJ-Wert greift der pauschale Abzug.</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-500 mb-1">Pauschal-Abzug <span className="text-slate-300">%</span></label>
@@ -5016,15 +5308,6 @@ ${trainingDays.filter(d => {
                     />
                   </div>
                 </div>
-                <label className="flex items-center gap-2 mt-3 text-sm text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={rulesDraft.useKjForPowerRides}
-                    onChange={(e) => setRulesDraft({ ...rulesDraft, useKjForPowerRides: e.target.checked })}
-                    className="w-4 h-4 rounded"
-                  />
-                  kJ-Vergleich bei Power-Meter-Rides nutzen (Min aus Strava-Korrektur und kJ)
-                </label>
               </div>
 
               {/* Makroziele */}

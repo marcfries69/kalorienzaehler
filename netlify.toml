@@ -30,6 +30,11 @@
 [functions."analyze-food-photo"]
   timeout = 26
 
+[functions."nutrition-sleep-quick"]
+  timeout = 26
+
+# correlate-nutrition-sleep-background ist eine Background-Function (kein Timeout nötig)
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
