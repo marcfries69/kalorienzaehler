@@ -19,5 +19,36 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Als Homescreen-App auf iOS bleibt der geladene Code oft im Speicher, auch wenn
+      // längst eine neue Version deployed ist – ein einfaches "App neu öffnen" reicht dann
+      // nicht. Bei jedem Sichtbarwerden per No-Cache-Fetch prüfen, ob sich der referenzierte
+      // Haupt-Bundle-Pfad geändert hat, und bei Bedarf neu laden.
+      (function () {
+        function currentBundleSrc() {
+          var el = document.querySelector('script[type="module"][src]');
+          return el ? el.getAttribute('src') : null;
+        }
+        var initialSrc = currentBundleSrc();
+        function checkForUpdate() {
+          fetch('/index.html', { cache: 'no-store' })
+            .then(function (res) { return res.text(); })
+            .then(function (html) {
+              var match = html.match(/<script[^>]+type="module"[^>]+src="([^"]+)"/);
+              var latestSrc = match ? match[1] : null;
+              if (latestSrc && initialSrc && latestSrc !== initialSrc) {
+                window.location.reload();
+              }
+            })
+            .catch(function () {});
+        }
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') checkForUpdate();
+        });
+        window.addEventListener('pageshow', function (e) {
+          if (e.persisted) checkForUpdate();
+        });
+      })();
+    </script>
   </body>
 </html>
