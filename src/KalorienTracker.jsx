@@ -123,19 +123,30 @@ const DEFAULT_RULES = {
   carbIntense:   80, // g/h, sehr intensiv (Z4/Z5/Z6) von Beginn an
 };
 
+// Erzwungene Migration auf die neue Erhaltungs-/Defizit-Basis (2400/2200/200), unabhängig
+// vom vorherigen Wert. Ein Abgleich gegen die alten Defaults (2100/1900/1800) reicht NICHT –
+// wer die Regeln vorher schon einmal manuell angepasst hatte (z.B. 1750/1850/300), wird von
+// einem exakten Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen Werten
+// stehen. Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind erneute
+// manuelle Anpassungen wieder verbindlich.
+const RULES_MIGRATION_VERSION = 2;
+
 const loadRules = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(RULES_STORAGE_KEY) || 'null');
-    if (!saved) return { ...DEFAULT_RULES };
-    // Migration: alte, nie manuell angepasste Erhaltungs-/Untergrenze-Werte (2100/1900)
-    // auf die neue Basis (2400/2200) heben – nur wenn sie noch exakt den alten Defaults
-    // entsprechen, damit eine bewusst andere Nutzer-Einstellung nicht überschrieben wird.
-    if (saved.maintenanceBase === 2100) saved.maintenanceBase = DEFAULT_RULES.maintenanceBase;
-    if (saved.kcalMinDaily === 1900) saved.kcalMinDaily = DEFAULT_RULES.kcalMinDaily;
-    // kcalRestBase auf denselben Stand heben wie kcalMinDaily (1800 war die alte Basis,
-    // solange die Untergrenze noch 1900 war) – sonst bleibt an Trainingstagen ein Rest-Gap
-    // zur Erhaltung übrig und das Defizit weicht dort von den konstanten 200 kcal ab.
-    if (saved.kcalRestBase === 1800) saved.kcalRestBase = DEFAULT_RULES.kcalRestBase;
+    if (!saved) return { ...DEFAULT_RULES, __migrationVersion: RULES_MIGRATION_VERSION };
+    if (!(saved.__migrationVersion >= RULES_MIGRATION_VERSION)) {
+      saved.maintenanceBase  = DEFAULT_RULES.maintenanceBase;
+      saved.kcalMinDaily     = DEFAULT_RULES.kcalMinDaily;
+      saved.kcalRestBase     = DEFAULT_RULES.kcalRestBase;
+      saved.referenceDeficit = DEFAULT_RULES.referenceDeficit;
+      saved.__migrationVersion = RULES_MIGRATION_VERSION;
+      // calorieGoal wirkt in mehreren Berechnungen als Fallback vor kcalRestBase – ein alter
+      // Wert würde die gerade erzwungene Migration sonst wieder überschreiben.
+      localStorage.setItem('calorie-goal', String(DEFAULT_RULES.kcalRestBase));
+      localStorage.removeItem('ki-result');
+      localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(saved));
+    }
     delete saved.useKjForPowerRides; // Regel jetzt fest: kJ immer 1:1, kein Vergleich mehr
     return {
       ...DEFAULT_RULES,
