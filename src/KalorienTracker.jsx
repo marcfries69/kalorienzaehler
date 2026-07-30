@@ -699,12 +699,13 @@ const KalorienTracker = () => {
 
       const savedGoal = localStorage.getItem('calorie-goal');
       const parsedGoal = parseInt(savedGoal);
-      // Migrate old base values to current base (1800) — 2200 bleibt ausgenommen,
-      // das ist seit der Erhaltungs-Anhebung die neue reguläre Untergrenze (kcalMinDaily).
-      if ([2100, 2000, 1950, 1900].includes(parsedGoal)) {
-        localStorage.setItem('calorie-goal', '1800');
-        setCalorieGoal(1800);
-      } else if (savedGoal && !isNaN(parsedGoal) && parsedGoal > 0) {
+      // Alte einmalige "auf 1800 zurücksetzen"-Migration entfernt: sie verglich gegen fest
+      // einprogrammierte Zahlenwerte (2100/2000/1950/1900), die inzwischen mit echten,
+      // aktuell gültigen Basiswerten kollidieren (z.B. hat die Regel-Migration in loadRules()
+      // calorieGoal zuletzt korrekt auf 2100 gesetzt – genau dieser Wert wäre hier sofort
+      // wieder auf 1800 zurückgesetzt worden). Der versionierte Regel-Migrationspfad deckt
+      // die Basiswert-Aktualisierung jetzt zuverlässig ab, ohne solche Kollisionen.
+      if (savedGoal && !isNaN(parsedGoal) && parsedGoal > 0) {
         setCalorieGoal(parsedGoal);
       }
       // Clean up stale "null" string from previous KI bug
