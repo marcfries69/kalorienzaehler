@@ -52,7 +52,8 @@ Antworte NUR mit diesem JSON – kein Markdown, keine Kommentare:
       "amount": "Mengenangabe mit Einheit",
       "kcal": Zahl,
       "protein": Zahl,
-      "carbs": Zahl,
+      "carbsComplex": Zahl (langkettige/komplexe Kohlenhydrate in g – Stärke aus Vollkorn, Hafer, Hülsenfrüchten, Kartoffeln, Gemüse etc., langsame Verdauung),
+      "carbsSimple": Zahl (kurzkettige/einfache Kohlenhydrate in g – Zucker, Süßigkeiten, Weißmehl, Fruchtzucker, Honig, Softdrinks etc., schnelle Verdauung),
       "fat": Zahl,
       "fiber": Zahl,
       "caffeine": Zahl (mg, 0 falls kein Koffein enthalten – z.B. Kaffee ~80mg/Tasse, Espresso ~63mg, Schwarztee ~40mg, Grüntee ~25mg, Cola ~30mg/330ml, Energy Drink ~80mg/250ml)
@@ -100,18 +101,26 @@ Mikronährstoff-Einheiten: calcium/iron/magnesium/zinc/vitaminC/potassium in mg,
 
     const parsed = JSON.parse(match[0]);
     const totals = parsed.components.reduce((acc, c) => ({
-      kcal:     acc.kcal     + (c.kcal     || 0),
-      protein:  acc.protein  + (c.protein  || 0),
-      carbs:    acc.carbs    + (c.carbs    || 0),
-      fat:      acc.fat      + (c.fat      || 0),
-      fiber:    acc.fiber    + (c.fiber    || 0),
-      caffeine: acc.caffeine + (c.caffeine || 0),
-    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0 });
+      kcal:         acc.kcal         + (c.kcal         || 0),
+      protein:      acc.protein      + (c.protein      || 0),
+      carbsComplex: acc.carbsComplex + (c.carbsComplex  || 0),
+      carbsSimple:  acc.carbsSimple  + (c.carbsSimple   || 0),
+      fat:          acc.fat          + (c.fat           || 0),
+      fiber:        acc.fiber        + (c.fiber         || 0),
+      caffeine:     acc.caffeine     + (c.caffeine      || 0),
+    }), { kcal: 0, protein: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fiber: 0, caffeine: 0 });
+    // carbs = Summe aus komplex + einfach – so bleibt der Gesamtwert konsistent mit dem
+    // Split, statt eine dritte, potenziell abweichende KI-Schätzung zu übernehmen. Gilt
+    // auch pro Komponente, damit die Detail-Ansicht weiterhin einen carbs-Wert hat.
+    totals.carbs = Math.round((totals.carbsComplex + totals.carbsSimple) * 10) / 10;
+    const componentsWithCarbs = parsed.components.map(c => ({
+      ...c, carbs: Math.round(((c.carbsComplex || 0) + (c.carbsSimple || 0)) * 10) / 10,
+    }));
 
     return Response.json({
       name:             parsed.name,
       ...totals,
-      components:       parsed.components,
+      components:       componentsWithCarbs,
       healthScore:      parsed.healthScore      || 3,
       healthExplanation: parsed.healthExplanation || '',
       micronutrients:   parsed.micronutrients   || null,

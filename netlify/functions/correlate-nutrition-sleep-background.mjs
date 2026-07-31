@@ -151,7 +151,7 @@ ${binTable}
 
 Analysiere diese VORBERECHNETEN Zahlen (nicht raten, nur interpretieren was die Zahlen hergeben). Finde die wichtigsten Muster, sei ehrlich über die Grenzen bei dieser Stichprobengröße, unterscheide klar zwischen "auffällig" (|r|>0,3 oder deutlicher Gruppenunterschied) und "kein klares Signal". Erwähne, dass Korrelation nicht Kausalität ist und Trainingslast ein möglicher Störfaktor ist, den diese Analyse nicht herausrechnet.
 
-Der Nutzer will explizit wissen, ob Menge und Verteilung der Makros AB 18 UHR (Kalorien/Protein/Carbs/Fett am Abend) sich auf Schlaf/Recovery auswirken — nimm dazu klar Stellung (bestätigt / nicht bestätigt / Daten reichen nicht), auch wenn kein starkes Muster erkennbar ist.
+Der Nutzer will explizit wissen, ob Menge und Verteilung der Makros AB 18 UHR (Kalorien/Protein/Carbs/Fett am Abend) sich auf Schlaf/Recovery auswirken — insbesondere ob komplexe/langkettige und einfache/kurzkettige Kohlenhydrate abends sich unterschiedlich auswirken. Nimm dazu klar Stellung (bestätigt / nicht bestätigt / Daten reichen nicht), auch wenn kein starkes Muster erkennbar ist.
 
 JSON-Format (STRIKT, NUR valides JSON, keine Markdown-Fences, max 5 Muster, max 3 Empfehlungen):
 {"zusammenfassung":"3-4 Sätze Gesamtbild","muster":[{"beschreibung":"Was auffällt","staerke":"stark|moderat|schwach","evidenz":"r-Wert oder Gruppenvergleich als Beleg"}],"top_empfehlungen":[{"titel":"Kurz","beschreibung":"1-2 Sätze konkrete Handlung"}]}`

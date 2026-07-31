@@ -68,7 +68,9 @@ export function summarizeNutritionDay(row) {
   })
   const eveningKcal = Math.round(eveningMeals.reduce((s, m) => s + (m.kcal || 0), 0))
   const eveningProteinG = Math.round(eveningMeals.reduce((s, m) => s + (m.protein || 0), 0))
-  const eveningCarbsG = Math.round(eveningMeals.reduce((s, m) => s + (m.carbs || 0), 0))
+  const eveningCarbsComplexG = Math.round(eveningMeals.reduce((s, m) => s + (m.carbsComplex || 0), 0))
+  const eveningCarbsSimpleG = Math.round(eveningMeals.reduce((s, m) => s + (m.carbsSimple || 0), 0))
+  const eveningCarbsG = eveningCarbsComplexG + eveningCarbsSimpleG
   const eveningFatG = Math.round(eveningMeals.reduce((s, m) => s + (m.fat || 0), 0))
 
   return {
@@ -90,6 +92,8 @@ export function summarizeNutritionDay(row) {
     lateKcal: Math.round(lateKcal),
     eveningKcal,
     eveningProteinG,
+    eveningCarbsComplexG,
+    eveningCarbsSimpleG,
     eveningCarbsG,
     eveningFatG,
     eveningMealCount: eveningMeals.length,
@@ -189,7 +193,9 @@ const NUTRITION_FEATURES = [
   ['lateCaffeineMg',   p => p.nutrition.lateCaffeineMg,   'Koffein nach 14 Uhr (mg)'],
   ['eveningKcal',      p => p.nutrition.eveningKcal,      'Kalorien ab 18 Uhr'],
   ['eveningProteinG',  p => p.nutrition.eveningProteinG,  'Protein ab 18 Uhr (g)'],
-  ['eveningCarbsG',    p => p.nutrition.eveningCarbsG,    'Kohlenhydrate ab 18 Uhr (g)'],
+  ['eveningCarbsComplexG', p => p.nutrition.eveningCarbsComplexG, 'Kohlenhydrate (komplex) ab 18 Uhr (g)'],
+  ['eveningCarbsSimpleG',  p => p.nutrition.eveningCarbsSimpleG,  'Kohlenhydrate (einfach) ab 18 Uhr (g)'],
+  ['eveningCarbsG',    p => p.nutrition.eveningCarbsG,    'Kohlenhydrate gesamt ab 18 Uhr (g)'],
   ['eveningFatG',      p => p.nutrition.eveningFatG,      'Fett ab 18 Uhr (g)'],
 ]
 

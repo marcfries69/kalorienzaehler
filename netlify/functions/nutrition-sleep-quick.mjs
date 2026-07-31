@@ -108,17 +108,17 @@ export default async (req) => {
         return `${p.nutritionDate}|kcalΔ:${n.kcalDelta ?? '–'}|Carbs:${n.carbsG ?? '–'}g|Ballast:${n.fiberG ?? '–'}g|` +
           `späteCarbs:${n.lateCarbsG ?? '–'}g|letzteMahlzeit:${n.lastMealTime ?? '–'}|` +
           `Koffein:${n.caffeineMg ?? '–'}mg|KoffeinNach14Uhr:${n.lateCaffeineMg ?? '–'}mg|` +
-          `AbendKcal:${n.eveningKcal ?? '–'}|AbendProtein:${n.eveningProteinG ?? '–'}g|AbendCarbs:${n.eveningCarbsG ?? '–'}g|AbendFett:${n.eveningFatG ?? '–'}g|→` +
+          `AbendKcal:${n.eveningKcal ?? '–'}|AbendProtein:${n.eveningProteinG ?? '–'}g|AbendCarbsKomplex:${n.eveningCarbsComplexG ?? '–'}g|AbendCarbsEinfach:${n.eveningCarbsSimpleG ?? '–'}g|AbendFett:${n.eveningFatG ?? '–'}g|→` +
           `HRV:${s?.hrv ?? '–'}|Recovery:${s?.recoveryScore ?? '–'}|SleepEff:${s?.sleepEfficiency ?? '–'}|RHR:${s?.rhr ?? '–'}`
       }).join('\n')
 
       const prompt = `Du bist Ernährungs-/Schlafcoach. Hier sind ${validPairs.length} Tage: Ernährung an Tag D, Schlaf/Recovery am Folgetag D+1 (Whoop/Oura).
 
-FORMAT: Datum|kcalΔ (Über-/Unterschuss zum Ziel)|Kohlenhydrate|Ballaststoffe|Kohlenhydrate nach 20 Uhr|Uhrzeit letzte Mahlzeit|Koffein gesamt|Koffein nach 14 Uhr|Kalorien ab 18 Uhr|Protein ab 18 Uhr|Kohlenhydrate ab 18 Uhr|Fett ab 18 Uhr|→|HRV|Recovery-Score|Sleep Efficiency|Ruhepuls
+FORMAT: Datum|kcalΔ (Über-/Unterschuss zum Ziel)|Kohlenhydrate|Ballaststoffe|Kohlenhydrate nach 20 Uhr|Uhrzeit letzte Mahlzeit|Koffein gesamt|Koffein nach 14 Uhr|Kalorien ab 18 Uhr|Protein ab 18 Uhr|Kohlenhydrate komplex/langkettig ab 18 Uhr|Kohlenhydrate einfach/kurzkettig ab 18 Uhr|Fett ab 18 Uhr|→|HRV|Recovery-Score|Sleep Efficiency|Ruhepuls
 
 ${table}
 
-Der Nutzer will explizit wissen, ob Menge und Verteilung der Makros AB 18 UHR (nicht nur die späte Mahlzeit an sich) sich auf Schlaf/Recovery auswirken — geh in der Gesamteinschätzung gezielt darauf ein, auch wenn kein starkes Muster erkennbar ist.
+Der Nutzer will explizit wissen, ob Menge und Verteilung der Makros AB 18 UHR sich auf Schlaf/Recovery auswirken — insbesondere ob einfache/kurzkettige Kohlenhydrate abends (schneller Blutzuckeranstieg) sich anders auswirken als komplexe/langkettige. Geh in der Gesamteinschätzung gezielt darauf ein, auch wenn kein starkes Muster erkennbar ist.
 
 Gib für jeden Tag, an dem etwas auffällt (nicht für unauffällige Tage), einen SEHR kurzen Hinweis (max 12 Wörter). Plus eine 2-3-Satz-Gesamteinschätzung über erste Muster, die du in diesen ${validPairs.length} Tagen siehst. Das ist eine ERSTE Einschätzung auf kleiner Stichprobe, keine gesicherte Aussage — formuliere entsprechend vorsichtig.
 

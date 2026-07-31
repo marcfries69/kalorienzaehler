@@ -845,13 +845,17 @@ const KalorienTracker = () => {
       kcal: acc.kcal + (m.kcal || 0), protein: acc.protein + (m.protein || 0),
       carbs: acc.carbs + (m.carbs || 0), fat: acc.fat + (m.fat || 0), fiber: acc.fiber + (m.fiber || 0),
       caffeine: acc.caffeine + (m.caffeine || 0),
-    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0 });
+      carbsComplex: acc.carbsComplex + (m.carbsComplex || 0),
+      carbsSimple:  acc.carbsSimple  + (m.carbsSimple  || 0),
+    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0 });
     return {
       user_id: NUTRITION_USER_ID, date: dateKey,
       total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
       carbs_g: Math.round(totals.carbs * 10) / 10, fat_g: Math.round(totals.fat * 10) / 10,
       fiber_g: Math.round(totals.fiber * 10) / 10, water_ml: waterMl || 0,
       caffeine_mg: Math.round(totals.caffeine),
+      carbs_complex_g: Math.round(totals.carbsComplex * 10) / 10,
+      carbs_simple_g:  Math.round(totals.carbsSimple  * 10) / 10,
       kcal_goal: goal,
       meals: meals || [],   // volle Objekte – Grundlage für Multi-Device-Sync
       updated_at: ts,
@@ -1337,6 +1341,8 @@ const KalorienTracker = () => {
       kcal:    acc.kcal    + (meal.kcal    || 0),
       protein: acc.protein + (meal.protein || 0),
       carbs:   acc.carbs   + (meal.carbs   || 0),
+      carbsComplex: acc.carbsComplex + (meal.carbsComplex || 0),
+      carbsSimple:  acc.carbsSimple  + (meal.carbsSimple  || 0),
       fat:     acc.fat     + (meal.fat     || 0),
       fiber:   acc.fiber   + (meal.fiber   || 0),
       calcium:    acc.calcium    + (mn.calcium    || 0),
@@ -1349,7 +1355,7 @@ const KalorienTracker = () => {
       vitaminB12: acc.vitaminB12 + (mn.vitaminB12 || 0),
       folate:     acc.folate     + (mn.folate     || 0),
     };
-  }, { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0,
+  }, { kcal: 0, protein: 0, carbs: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fiber: 0,
        calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0,
        vitaminC: 0, vitaminD: 0, vitaminB12: 0, folate: 0 });
   // Whether at least one meal today has micronutrient data
@@ -1902,7 +1908,8 @@ const KalorienTracker = () => {
         // Makros ab 18 Uhr – für die Ernährung×Schlaf-Auswertung in der Historie.
         eveningKcal:    Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.kcal    || 0), 0)),
         eveningProtein: Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.protein || 0), 0)),
-        eveningCarbs:   Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.carbs   || 0), 0)),
+        eveningCarbsComplex: Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.carbsComplex || 0), 0)),
+        eveningCarbsSimple:  Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.carbsSimple  || 0), 0)),
         eveningFat:     Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.fat     || 0), 0)),
         water:   waterHistory[d] || 0,
         goal:    dayGoal,
@@ -2482,7 +2489,7 @@ ${trainingDays.filter(d => {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
                   { label: 'Protein',       value: totals.protein, goal: macroGoalGrams.protein, bar: 'bg-blue-500',   from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900',   barBg: 'bg-blue-200'   },
-                  { label: 'Kohlenhydrate', value: totals.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-500',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900',  barBg: 'bg-amber-200'  },
+                  { label: 'Kohlenhydrate', value: totals.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-500',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900',  barBg: 'bg-amber-200',  sub: `${Math.round(totals.carbsComplex)}g komplex · ${Math.round(totals.carbsSimple)}g einfach` },
                   { label: 'Fett',          value: totals.fat,     goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200' },
                   { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900',  barBg: 'bg-green-200'  },
                 ].map(s => {
@@ -2499,7 +2506,7 @@ ${trainingDays.filter(d => {
                         }
                       </div>
                       <p className={`text-2xl font-bold ${s.num} mono`}>{Math.round(s.value)}g</p>
-                      <p className={`text-xs ${s.color} opacity-60 mb-2`}>Ziel: {s.goal}g</p>
+                      <p className={`text-xs ${s.color} opacity-60 mb-2`}>Ziel: {s.goal}g{s.sub ? ` · ${s.sub}` : ''}</p>
                       <div className={`h-1.5 ${s.barBg} rounded-full overflow-hidden`}>
                         <div
                           className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-green-500' : s.bar}`}
@@ -2518,10 +2525,12 @@ ${trainingDays.filter(d => {
                 const eveningTotals = eveningMeals.reduce((acc, m) => ({
                   kcal:    acc.kcal    + (m.kcal    || 0),
                   protein: acc.protein + (m.protein || 0),
-                  carbs:   acc.carbs   + (m.carbs   || 0),
+                  carbsComplex: acc.carbsComplex + (m.carbsComplex || 0),
+                  carbsSimple:  acc.carbsSimple  + (m.carbsSimple  || 0),
                   fat:     acc.fat     + (m.fat     || 0),
                   fiber:   acc.fiber   + (m.fiber   || 0),
-                }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+                }), { kcal: 0, protein: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fiber: 0 });
+                const eveningCarbsTotal = eveningTotals.carbsComplex + eveningTotals.carbsSimple;
                 return (
                   <div className="mt-4 pt-4 border-t border-slate-100">
                     <div className="flex items-center gap-1.5 mb-2">
@@ -2529,11 +2538,13 @@ ${trainingDays.filter(d => {
                       <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wide">Makros ab 18 Uhr</h3>
                       <span className="text-[10px] text-slate-400">({eveningMeals.length} {eveningMeals.length === 1 ? 'Mahlzeit' : 'Mahlzeiten'})</span>
                     </div>
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                       {[
                         { label: 'Kcal',  value: Math.round(eveningTotals.kcal), unit: '' },
                         { label: 'P',     value: Math.round(eveningTotals.protein), unit: 'g' },
-                        { label: 'K',     value: Math.round(eveningTotals.carbs), unit: 'g' },
+                        { label: 'K komplex', value: Math.round(eveningTotals.carbsComplex), unit: 'g' },
+                        { label: 'K einfach', value: Math.round(eveningTotals.carbsSimple), unit: 'g' },
+                        { label: 'K gesamt', value: Math.round(eveningCarbsTotal), unit: 'g' },
                         { label: 'F',     value: Math.round(eveningTotals.fat), unit: 'g' },
                         { label: 'Ballast', value: Math.round(eveningTotals.fiber), unit: 'g' },
                       ].map(s => (
@@ -2897,7 +2908,7 @@ ${trainingDays.filter(d => {
                               </span>
                             )}
                             <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium mono">P: {Math.round(meal.protein)}g</span>
-                            <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium mono">K: {Math.round(meal.carbs)}g</span>
+                            <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium mono" title={`komplex ${Math.round(meal.carbsComplex || 0)}g · einfach ${Math.round(meal.carbsSimple || 0)}g`}>K: {Math.round(meal.carbs)}g</span>
                             <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono">F: {Math.round(meal.fat)}g</span>
                             {meal.caffeine > 0 && (
                               <span className="px-3 py-1 rounded-full bg-stone-200 text-stone-700 text-xs font-medium mono">☕ {Math.round(meal.caffeine)}mg</span>
@@ -3580,19 +3591,23 @@ ${trainingDays.filter(d => {
                       {[
                         { key: 'eveningKcal',    label: 'Kalorien',       unit: '',  barOn: 'bg-indigo-500', barOff: 'bg-indigo-300', bg: 'bg-indigo-50', border: 'border-indigo-200', title: 'text-indigo-700' },
                         { key: 'eveningProtein', label: 'Protein',       unit: 'g', barOn: 'bg-blue-500',   barOff: 'bg-blue-300',   bg: 'bg-blue-50',   border: 'border-blue-200',   title: 'text-blue-700'   },
-                        { key: 'eveningCarbs',   label: 'Kohlenhydrate', unit: 'g', barOn: 'bg-amber-500',  barOff: 'bg-amber-300',  bg: 'bg-amber-50',  border: 'border-amber-200',  title: 'text-amber-700'  },
+                        { key: 'eveningCarbsComplex', label: 'Carbs komplex', unit: 'g', barOn: 'bg-amber-500',  barOff: 'bg-amber-300',  bg: 'bg-amber-50',  border: 'border-amber-200',  title: 'text-amber-700'  },
+                        { key: 'eveningCarbsSimple',  label: 'Carbs einfach', unit: 'g', barOn: 'bg-rose-500',   barOff: 'bg-rose-300',   bg: 'bg-rose-50',   border: 'border-rose-200',   title: 'text-rose-700'   },
+                        { key: 'eveningCarbsTotal',   label: 'Carbs gesamt',  unit: 'g', barOn: 'bg-orange-500', barOff: 'bg-orange-300', bg: 'bg-orange-50', border: 'border-orange-200', title: 'text-orange-700',
+                          getVal: d => (d.eveningCarbsComplex || 0) + (d.eveningCarbsSimple || 0) },
                         { key: 'eveningFat',     label: 'Fett',          unit: 'g', barOn: 'bg-purple-500', barOff: 'bg-purple-300', bg: 'bg-purple-50', border: 'border-purple-200', title: 'text-purple-700' },
                       ].map(macro => {
-                        const maxVal = Math.max(...stats.dayData.map(d => d[macro.key] || 0), 1);
+                        const getVal = macro.getVal || (d => d[macro.key] || 0);
+                        const maxVal = Math.max(...stats.dayData.map(getVal), 1);
                         return (
                           <div key={macro.key} className={`rounded-2xl p-4 border ${macro.bg} ${macro.border}`}>
                             <div className="flex items-center justify-between mb-3">
                               <h4 className={`text-sm font-bold ${macro.title}`}>{macro.label}</h4>
-                              <span className="text-xs text-slate-400">Ø {Math.round(stats.dayData.reduce((s, d) => s + (d[macro.key] || 0), 0) / stats.dayData.length)}{macro.unit}</span>
+                              <span className="text-xs text-slate-400">Ø {Math.round(stats.dayData.reduce((s, d) => s + getVal(d), 0) / stats.dayData.length)}{macro.unit}</span>
                             </div>
                             <div className="flex items-end gap-0.5" style={{ height: '64px' }}>
                               {stats.dayData.map(day => {
-                                const val = day[macro.key] || 0;
+                                const val = getVal(day);
                                 const pct = val > 0 ? (val / maxVal) * 100 : 0;
                                 return (
                                   <div
@@ -4923,7 +4938,7 @@ ${trainingDays.filter(d => {
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.kcalDelta == null ? '–' : (p.nutrition.kcalDelta > 0 ? `+${p.nutrition.kcalDelta}` : p.nutrition.kcalDelta)}</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.carbsG ?? '–'}g</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.caffeineMg ?? '–'}mg</td>
-                                <td className="py-1.5 px-2 text-right text-slate-600" title={`P ${p.nutrition.eveningProteinG ?? '–'}g · K ${p.nutrition.eveningCarbsG ?? '–'}g · F ${p.nutrition.eveningFatG ?? '–'}g`}>{p.nutrition.eveningKcal ?? '–'}kcal</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600" title={`P ${p.nutrition.eveningProteinG ?? '–'}g · K ${p.nutrition.eveningCarbsG ?? '–'}g (${p.nutrition.eveningCarbsComplexG ?? '–'}g komplex / ${p.nutrition.eveningCarbsSimpleG ?? '–'}g einfach) · F ${p.nutrition.eveningFatG ?? '–'}g`}>{p.nutrition.eveningKcal ?? '–'}kcal</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600 border-l border-slate-100">{p.sleep?.hrv ?? '–'}</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.sleep?.recoveryScore ?? '–'}</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.sleep?.rhr ?? '–'}</td>
