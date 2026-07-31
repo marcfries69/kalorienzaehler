@@ -58,6 +58,19 @@ export function summarizeNutritionDay(row) {
   const lateCaffeineMg = afternoonMeals.reduce((s, m) => s + (m.caffeine || 0), 0)
   const caffeineMg = meals.reduce((s, m) => s + (m.caffeine || 0), 0)
 
+  // "Makros am Abend" (ab 18 Uhr) — eigener, expliziter Cutoff für die Frage, ob
+  // Menge/Verteilung der Abend-Ernährung den Schlaf beeinflusst (unabhängig vom
+  // 20-Uhr-"late"-Cutoff oben, der spezifisch sehr späte Nahrung misst).
+  const EVENING_CUTOFF_MIN = 18 * 60
+  const eveningMeals = meals.filter(m => {
+    const t = timeToMinutes(m.time)
+    return t != null && t >= EVENING_CUTOFF_MIN
+  })
+  const eveningKcal = Math.round(eveningMeals.reduce((s, m) => s + (m.kcal || 0), 0))
+  const eveningProteinG = Math.round(eveningMeals.reduce((s, m) => s + (m.protein || 0), 0))
+  const eveningCarbsG = Math.round(eveningMeals.reduce((s, m) => s + (m.carbs || 0), 0))
+  const eveningFatG = Math.round(eveningMeals.reduce((s, m) => s + (m.fat || 0), 0))
+
   return {
     date: row.date,
     kcal: row.total_kcal ?? null,
@@ -75,6 +88,11 @@ export function summarizeNutritionDay(row) {
     lastMealMinutes: lastMealMinutes >= 0 ? lastMealMinutes : null,
     lateCarbsG: Math.round(lateCarbsG * 10) / 10,
     lateKcal: Math.round(lateKcal),
+    eveningKcal,
+    eveningProteinG,
+    eveningCarbsG,
+    eveningFatG,
+    eveningMealCount: eveningMeals.length,
   }
 }
 
@@ -169,6 +187,10 @@ const NUTRITION_FEATURES = [
   ['waterMl',          p => p.nutrition.waterMl,          'Wasser (ml)'],
   ['caffeineMg',       p => p.nutrition.caffeineMg,       'Koffein gesamt (mg)'],
   ['lateCaffeineMg',   p => p.nutrition.lateCaffeineMg,   'Koffein nach 14 Uhr (mg)'],
+  ['eveningKcal',      p => p.nutrition.eveningKcal,      'Kalorien ab 18 Uhr'],
+  ['eveningProteinG',  p => p.nutrition.eveningProteinG,  'Protein ab 18 Uhr (g)'],
+  ['eveningCarbsG',    p => p.nutrition.eveningCarbsG,    'Kohlenhydrate ab 18 Uhr (g)'],
+  ['eveningFatG',      p => p.nutrition.eveningFatG,      'Fett ab 18 Uhr (g)'],
 ]
 
 const SLEEP_FEATURES = [
@@ -218,6 +240,7 @@ export const STANDARD_BINS = [
   { label: 'Viele späte Kohlenhydrate (> 40g nach 20 Uhr)', predicate: p => p.nutrition.lateCarbsG != null ? p.nutrition.lateCarbsG > 40 : null },
   { label: 'Koffein nach 14 Uhr', predicate: p => p.nutrition.lateCaffeineMg != null ? p.nutrition.lateCaffeineMg > 0 : null },
   { label: 'Hoher Koffeinkonsum (> 200mg/Tag)', predicate: p => p.nutrition.caffeineMg != null ? p.nutrition.caffeineMg > 200 : null },
+  { label: 'Hohe Kalorien ab 18 Uhr (> 800 kcal)', predicate: p => p.nutrition.eveningKcal != null ? p.nutrition.eveningKcal > 800 : null },
 ]
 
 export { addDays, timeToMinutes, minutesToTime }

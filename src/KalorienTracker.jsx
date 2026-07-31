@@ -1899,6 +1899,11 @@ const KalorienTracker = () => {
         carbs:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.carbs   || 0), 0)),
         fat:     Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fat     || 0), 0)),
         fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
+        // Makros ab 18 Uhr – für die Ernährung×Schlaf-Auswertung in der Historie.
+        eveningKcal:    Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.kcal    || 0), 0)),
+        eveningProtein: Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.protein || 0), 0)),
+        eveningCarbs:   Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.carbs   || 0), 0)),
+        eveningFat:     Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.fat     || 0), 0)),
         water:   waterHistory[d] || 0,
         goal:    dayGoal,
         erhaltung,
@@ -2505,6 +2510,42 @@ ${trainingDays.filter(d => {
                   );
                 })}
               </div>
+
+              {/* Makros ab 18 Uhr — für die Ernährung×Schlaf-Auswertung: zeigt, wie viel und
+                  welche Makros abends gegessen wurden, unabhängig vom Tagesgesamtwert oben. */}
+              {(() => {
+                const eveningMeals = currentMeals.filter(m => !m.isAutoCorrection && m.time >= '18:00');
+                const eveningTotals = eveningMeals.reduce((acc, m) => ({
+                  kcal:    acc.kcal    + (m.kcal    || 0),
+                  protein: acc.protein + (m.protein || 0),
+                  carbs:   acc.carbs   + (m.carbs   || 0),
+                  fat:     acc.fat     + (m.fat     || 0),
+                  fiber:   acc.fiber   + (m.fiber   || 0),
+                }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+                return (
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <Moon className="w-3.5 h-3.5 text-indigo-500" />
+                      <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wide">Makros ab 18 Uhr</h3>
+                      <span className="text-[10px] text-slate-400">({eveningMeals.length} {eveningMeals.length === 1 ? 'Mahlzeit' : 'Mahlzeiten'})</span>
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                      {[
+                        { label: 'Kcal',  value: Math.round(eveningTotals.kcal), unit: '' },
+                        { label: 'P',     value: Math.round(eveningTotals.protein), unit: 'g' },
+                        { label: 'K',     value: Math.round(eveningTotals.carbs), unit: 'g' },
+                        { label: 'F',     value: Math.round(eveningTotals.fat), unit: 'g' },
+                        { label: 'Ballast', value: Math.round(eveningTotals.fiber), unit: 'g' },
+                      ].map(s => (
+                        <div key={s.label} className="bg-indigo-50 border border-indigo-100 rounded-lg px-2 py-1.5 text-center">
+                          <p className="text-[10px] text-indigo-400 uppercase tracking-wide">{s.label}</p>
+                          <p className="text-sm font-bold text-indigo-700 mono">{s.value}{s.unit}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             );
             })()}
@@ -3526,6 +3567,71 @@ ${trainingDays.filter(d => {
                         </div>
                       );
                     })}
+                  </div>
+
+                  {/* ── Makros am Abend (ab 18 Uhr) pro Tag — Ernährung×Schlaf ── */}
+                  <div className="glass rounded-3xl p-6 shadow-xl mt-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Moon className="w-4 h-4 text-indigo-500" />
+                      <h3 className="text-lg font-bold text-slate-800">Makros am Abend (ab 18 Uhr)</h3>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-4">Zum Erkennen von Zusammenhängen zwischen Abend-Ernährung und Schlaf · Klick auf einen Tag → Tagesdetails öffnen</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { key: 'eveningKcal',    label: 'Kalorien',       unit: '',  barOn: 'bg-indigo-500', barOff: 'bg-indigo-300', bg: 'bg-indigo-50', border: 'border-indigo-200', title: 'text-indigo-700' },
+                        { key: 'eveningProtein', label: 'Protein',       unit: 'g', barOn: 'bg-blue-500',   barOff: 'bg-blue-300',   bg: 'bg-blue-50',   border: 'border-blue-200',   title: 'text-blue-700'   },
+                        { key: 'eveningCarbs',   label: 'Kohlenhydrate', unit: 'g', barOn: 'bg-amber-500',  barOff: 'bg-amber-300',  bg: 'bg-amber-50',  border: 'border-amber-200',  title: 'text-amber-700'  },
+                        { key: 'eveningFat',     label: 'Fett',          unit: 'g', barOn: 'bg-purple-500', barOff: 'bg-purple-300', bg: 'bg-purple-50', border: 'border-purple-200', title: 'text-purple-700' },
+                      ].map(macro => {
+                        const maxVal = Math.max(...stats.dayData.map(d => d[macro.key] || 0), 1);
+                        return (
+                          <div key={macro.key} className={`rounded-2xl p-4 border ${macro.bg} ${macro.border}`}>
+                            <div className="flex items-center justify-between mb-3">
+                              <h4 className={`text-sm font-bold ${macro.title}`}>{macro.label}</h4>
+                              <span className="text-xs text-slate-400">Ø {Math.round(stats.dayData.reduce((s, d) => s + (d[macro.key] || 0), 0) / stats.dayData.length)}{macro.unit}</span>
+                            </div>
+                            <div className="flex items-end gap-0.5" style={{ height: '64px' }}>
+                              {stats.dayData.map(day => {
+                                const val = day[macro.key] || 0;
+                                const pct = val > 0 ? (val / maxVal) * 100 : 0;
+                                return (
+                                  <div
+                                    key={day.date}
+                                    className="flex-1 relative flex flex-col justify-end cursor-pointer group"
+                                    style={{ height: '56px' }}
+                                    onClick={() => { setSelectedDate(day.date); setActiveTab('day'); }}
+                                  >
+                                    {val > 0 ? (
+                                      <div
+                                        className={`w-full rounded-t-sm transition-all group-hover:opacity-70 ${macro.barOn}`}
+                                        style={{ height: `${pct}%` }}
+                                        title={`${val}${macro.unit}`}
+                                      />
+                                    ) : (
+                                      <div className="w-full h-0.5 bg-slate-200 rounded-full" />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div className="flex justify-between mt-1">
+                              {stats.dayData.map(day => (
+                                <span
+                                  key={day.date}
+                                  className="flex-1 text-center text-slate-400 leading-tight select-none"
+                                  style={{ fontSize: isWeek ? '10px' : '8px' }}
+                                >
+                                  {isWeek
+                                    ? new Date(day.date + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short' })
+                                    : new Date(day.date + 'T12:00:00').getDate()
+                                  }
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </>
               )}
@@ -4795,6 +4901,7 @@ ${trainingDays.filter(d => {
                         <th className="text-right py-2 px-2 font-medium">kcal Δ</th>
                         <th className="text-right py-2 px-2 font-medium">Carbs</th>
                         <th className="text-right py-2 px-2 font-medium">Koffein</th>
+                        <th className="text-right py-2 px-2 font-medium">Abend (ab 18h)</th>
                         <th className="text-right py-2 px-2 font-medium border-l border-slate-200">HRV</th>
                         <th className="text-right py-2 px-2 font-medium">Recovery</th>
                         <th className="text-right py-2 px-2 font-medium">RHR</th>
@@ -4810,12 +4917,13 @@ ${trainingDays.filter(d => {
                               {new Date(p.nutritionDate + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} → {new Date(p.sleepDate + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
                             </td>
                             {p.excluded ? (
-                              <td colSpan={7} className="py-1.5 px-2 text-slate-400 italic">{p.excludeReason}</td>
+                              <td colSpan={8} className="py-1.5 px-2 text-slate-400 italic">{p.excludeReason}</td>
                             ) : (
                               <>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.kcalDelta == null ? '–' : (p.nutrition.kcalDelta > 0 ? `+${p.nutrition.kcalDelta}` : p.nutrition.kcalDelta)}</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.carbsG ?? '–'}g</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.nutrition.caffeineMg ?? '–'}mg</td>
+                                <td className="py-1.5 px-2 text-right text-slate-600" title={`P ${p.nutrition.eveningProteinG ?? '–'}g · K ${p.nutrition.eveningCarbsG ?? '–'}g · F ${p.nutrition.eveningFatG ?? '–'}g`}>{p.nutrition.eveningKcal ?? '–'}kcal</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600 border-l border-slate-100">{p.sleep?.hrv ?? '–'}</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.sleep?.recoveryScore ?? '–'}</td>
                                 <td className="py-1.5 px-2 text-right text-slate-600">{p.sleep?.rhr ?? '–'}</td>
