@@ -106,11 +106,11 @@ const compressImage = (file, maxDim = 1024, quality = 0.75) => new Promise((reso
 // editierbare Defaults. Siehe Einstellungs-Modal (showRulesSettings) für die UI dazu.
 const RULES_STORAGE_KEY = 'app-rules';
 const DEFAULT_RULES = {
-  kcalRestBase:    2100, // Basis Ruhetag/Sporttag (vor Floor/Sport-Zuschlag) — bewusst = kcalMinDaily,
+  kcalRestBase:    2000, // Basis Ruhetag/Sporttag (vor Floor/Sport-Zuschlag) — bewusst = kcalMinDaily,
                          // damit das Defizit an JEDEM Tag (auch mit Sport-Zuschlag) konstant bei
                          // referenceDeficit (200) bleibt, statt an Trainingstagen höher auszufallen.
-  kcalMinDaily:    2100, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
-  maintenanceBase: 2300, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
+  kcalMinDaily:    2000, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
+  maintenanceBase: 2200, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
   referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
   stravaDeflation:  25,  // % Abzug auf Strava-Kalorien ohne kJ-Wert (Überschätzungskorrektur)
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
@@ -129,7 +129,7 @@ const DEFAULT_RULES = {
 // einem exakten Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen Werten
 // stehen. Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind erneute
 // manuelle Anpassungen wieder verbindlich.
-const RULES_MIGRATION_VERSION = 3;
+const RULES_MIGRATION_VERSION = 4;
 
 const loadRules = () => {
   try {
@@ -289,10 +289,10 @@ const KalorienTracker = () => {
       const r = JSON.parse(localStorage.getItem('ki-result') || 'null');
       // Discard stale results where calories were null (old bug)
       if (r && !r.kcalGoalRestDay && !r.kcalGoal) return null;
-      // Invalidate cache if base calorie target changed (now 2100), if it still carries the
+      // Invalidate cache if base calorie target changed (now 2000), if it still carries the
       // removed kcalGoalVo2Day field (old VO2max-base scheme), or rest-day macros are stale
       const staleRestMacros = r?.macroGoalsRestDay && (r.macroGoalsRestDay.carbsG !== 150 || r.macroGoalsRestDay.proteinG !== 150);
-      if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 2100 || 'kcalGoalVo2Day' in r || staleRestMacros)) {
+      if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 2000 || 'kcalGoalVo2Day' in r || staleRestMacros)) {
         localStorage.removeItem('ki-result');
         return null;
       }
