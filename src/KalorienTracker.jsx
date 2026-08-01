@@ -117,6 +117,9 @@ const DEFAULT_RULES = {
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
   macroCycle: { protein: 150, carbs: 300, fat: 85 }, // Zone2 ≥90min / VO2max-Rad
   fiberGoal: 35,
+  // AHA-Richtwert zur LDL-Senkung (strenger als die allgemeine WHO/DGE-Empfehlung von 10%
+  // der Kalorien) – gesättigte Fettsäuren sollen unter diesem Anteil der Tageskalorien bleiben.
+  satFatMaxPct: 7,
   carbHour1:     40, // g/h, 1. Stunde (moderat)
   carbHour2:     60, // g/h, 2. Stunde (moderat)
   carbHour3plus: 80, // g/h, ab 3. Stunde (moderat)
@@ -847,7 +850,9 @@ const KalorienTracker = () => {
       caffeine: acc.caffeine + (m.caffeine || 0),
       carbsComplex: acc.carbsComplex + (m.carbsComplex || 0),
       carbsSimple:  acc.carbsSimple  + (m.carbsSimple  || 0),
-    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0 });
+      fatSaturated:   acc.fatSaturated   + (m.fatSaturated   || 0),
+      fatUnsaturated: acc.fatUnsaturated + (m.fatUnsaturated || 0),
+    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0 });
     return {
       user_id: NUTRITION_USER_ID, date: dateKey,
       total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
@@ -856,6 +861,8 @@ const KalorienTracker = () => {
       caffeine_mg: Math.round(totals.caffeine),
       carbs_complex_g: Math.round(totals.carbsComplex * 10) / 10,
       carbs_simple_g:  Math.round(totals.carbsSimple  * 10) / 10,
+      fat_saturated_g:   Math.round(totals.fatSaturated   * 10) / 10,
+      fat_unsaturated_g: Math.round(totals.fatUnsaturated * 10) / 10,
       kcal_goal: goal,
       meals: meals || [],   // volle Objekte – Grundlage für Multi-Device-Sync
       updated_at: ts,
@@ -1344,6 +1351,8 @@ const KalorienTracker = () => {
       carbsComplex: acc.carbsComplex + (meal.carbsComplex || 0),
       carbsSimple:  acc.carbsSimple  + (meal.carbsSimple  || 0),
       fat:     acc.fat     + (meal.fat     || 0),
+      fatSaturated:   acc.fatSaturated   + (meal.fatSaturated   || 0),
+      fatUnsaturated: acc.fatUnsaturated + (meal.fatUnsaturated || 0),
       fiber:   acc.fiber   + (meal.fiber   || 0),
       calcium:    acc.calcium    + (mn.calcium    || 0),
       iron:       acc.iron       + (mn.iron       || 0),
@@ -1355,7 +1364,7 @@ const KalorienTracker = () => {
       vitaminB12: acc.vitaminB12 + (mn.vitaminB12 || 0),
       folate:     acc.folate     + (mn.folate     || 0),
     };
-  }, { kcal: 0, protein: 0, carbs: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fiber: 0,
+  }, { kcal: 0, protein: 0, carbs: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0,
        calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0,
        vitaminC: 0, vitaminD: 0, vitaminB12: 0, folate: 0 });
   // Whether at least one meal today has micronutrient data
@@ -1904,6 +1913,9 @@ const KalorienTracker = () => {
         protein: Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.protein || 0), 0)),
         carbs:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.carbs   || 0), 0)),
         fat:     Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fat     || 0), 0)),
+        fatSaturated:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fatSaturated   || 0), 0)),
+        fatUnsaturated: Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fatUnsaturated || 0), 0)),
+        satFatMaxG: Math.round((dayGoal * rules.satFatMaxPct / 100) / 9),
         fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
         // Makros ab 18 Uhr – für die Ernährung×Schlaf-Auswertung in der Historie.
         eveningKcal:    Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.kcal    || 0), 0)),
@@ -2486,37 +2498,50 @@ ${trainingDays.filter(d => {
               )}
 
               {/* Macro cards with progress */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {[
+              {(() => {
+                // LDL-Ziel: gesättigte Fettsäuren sollen unter satFatMaxPct% der Tageskalorien
+                // bleiben (AHA-Richtwert, strenger als die allgemeine 10%-Empfehlung) — 9 kcal/g.
+                const satFatMaxG = Math.round((effectiveGoal * rules.satFatMaxPct / 100) / 9);
+                const satFatOver = totals.fatSaturated > satFatMaxG;
+                const cards = [
                   { label: 'Protein',       value: totals.protein, goal: macroGoalGrams.protein, bar: 'bg-blue-500',   from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900',   barBg: 'bg-blue-200'   },
                   { label: 'Kohlenhydrate', value: totals.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-500',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900',  barBg: 'bg-amber-200',  sub: `${Math.round(totals.carbsComplex)}g komplex · ${Math.round(totals.carbsSimple)}g einfach` },
-                  { label: 'Fett',          value: totals.fat,     goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200' },
+                  satFatOver
+                    ? { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-red-500',    from: 'from-red-50',    to: 'to-red-100',    border: 'border-red-300',    color: 'text-red-600',    num: 'text-red-900',    barBg: 'bg-red-200',
+                        sub: `⚠️ ${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g für LDL) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` }
+                    : { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200',
+                        sub: `${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` },
                   { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900',  barBg: 'bg-green-200'  },
-                ].map(s => {
-                  const pct = Math.min((s.value / s.goal) * 100, 100);
-                  const reached = s.value >= s.goal;
-                  const remaining = Math.round(s.goal - s.value);
-                  return (
-                    <div key={s.label} className={`stat-card bg-gradient-to-br ${s.from} ${s.to} rounded-xl p-4 border ${s.border}`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <p className={`${s.color} text-xs font-semibold uppercase tracking-wide`}>{s.label}</p>
-                        {reached
-                          ? <span className="text-xs text-green-600 font-bold">✓</span>
-                          : <span className={`text-xs ${s.color} opacity-70`}>-{remaining}g</span>
-                        }
-                      </div>
-                      <p className={`text-2xl font-bold ${s.num} mono`}>{Math.round(s.value)}g</p>
-                      <p className={`text-xs ${s.color} opacity-60 mb-2`}>Ziel: {s.goal}g{s.sub ? ` · ${s.sub}` : ''}</p>
-                      <div className={`h-1.5 ${s.barBg} rounded-full overflow-hidden`}>
-                        <div
-                          className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-green-500' : s.bar}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                ];
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {cards.map(s => {
+                      const pct = Math.min((s.value / s.goal) * 100, 100);
+                      const reached = s.value >= s.goal;
+                      const remaining = Math.round(s.goal - s.value);
+                      return (
+                        <div key={s.label} className={`stat-card bg-gradient-to-br ${s.from} ${s.to} rounded-xl p-4 border ${s.border}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <p className={`${s.color} text-xs font-semibold uppercase tracking-wide`}>{s.label}</p>
+                            {reached
+                              ? <span className="text-xs text-green-600 font-bold">✓</span>
+                              : <span className={`text-xs ${s.color} opacity-70`}>-{remaining}g</span>
+                            }
+                          </div>
+                          <p className={`text-2xl font-bold ${s.num} mono`}>{Math.round(s.value)}g</p>
+                          <p className={`text-xs ${s.color} opacity-60 mb-2`}>Ziel: {s.goal}g{s.sub ? ` · ${s.sub}` : ''}</p>
+                          <div className={`h-1.5 ${s.barBg} rounded-full overflow-hidden`}>
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-green-500' : s.bar}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
               {/* Makros ab 18 Uhr — für die Ernährung×Schlaf-Auswertung: zeigt, wie viel und
                   welche Makros abends gegessen wurden, unabhängig vom Tagesgesamtwert oben. */}
@@ -2909,7 +2934,7 @@ ${trainingDays.filter(d => {
                             )}
                             <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium mono">P: {Math.round(meal.protein)}g</span>
                             <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium mono" title={`komplex ${Math.round(meal.carbsComplex || 0)}g · einfach ${Math.round(meal.carbsSimple || 0)}g`}>K: {Math.round(meal.carbs)}g</span>
-                            <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono">F: {Math.round(meal.fat)}g</span>
+                            <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono" title={`gesättigt ${Math.round(meal.fatSaturated || 0)}g · ungesättigt ${Math.round(meal.fatUnsaturated || 0)}g`}>F: {Math.round(meal.fat)}g</span>
                             {meal.caffeine > 0 && (
                               <span className="px-3 py-1 rounded-full bg-stone-200 text-stone-700 text-xs font-medium mono">☕ {Math.round(meal.caffeine)}mg</span>
                             )}
@@ -3578,6 +3603,74 @@ ${trainingDays.filter(d => {
                         </div>
                       );
                     })}
+                  </div>
+
+                  {/* ── Gesättigte Fettsäuren pro Tag — LDL-Ziel ── */}
+                  <div className="glass rounded-3xl p-6 shadow-xl mt-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-lg font-bold text-slate-800">Gesättigte Fettsäuren pro Tag</h3>
+                      <span className="text-xs text-slate-400">Ø {Math.round(stats.dayData.reduce((s, d) => s + d.fatSaturated, 0) / stats.dayData.length)}g</span>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-4">Für niedriges LDL-Cholesterin · gestrichelt = Tagesgrenze ({rules.satFatMaxPct}% der Kalorien) · Klick auf einen Tag → Tagesdetails öffnen</p>
+                    <div className="flex items-end gap-1" style={{ height: '110px' }}>
+                      {(() => {
+                        const maxVal = Math.max(...stats.dayData.map(d => Math.max(d.fatSaturated, d.satFatMaxG)), 1);
+                        return stats.dayData.map(day => {
+                          const pct = (day.fatSaturated / maxVal) * 100;
+                          const maxPct = (day.satFatMaxG / maxVal) * 100;
+                          const over = day.fatSaturated > day.satFatMaxG;
+                          const isSel = day.date === selectedDate;
+                          return (
+                            <div
+                              key={day.date}
+                              className="flex-1 flex flex-col items-center gap-1 cursor-pointer group"
+                              onClick={() => { setSelectedDate(day.date); setActiveTab('day'); }}
+                            >
+                              <div className="w-full relative flex flex-col justify-end" style={{ height: '90px' }}>
+                                <div
+                                  className="absolute left-0 right-0 border-t border-dashed border-slate-400 pointer-events-none"
+                                  style={{ bottom: `${maxPct}%` }}
+                                />
+                                {day.fatSaturated > 0 ? (
+                                  <div
+                                    className={`w-full rounded-t-md transition-all group-hover:opacity-75 ${
+                                      over ? 'bg-gradient-to-t from-red-500 to-rose-400' : 'bg-gradient-to-t from-emerald-500 to-teal-400'
+                                    } ${isSel ? 'ring-2 ring-offset-1 ring-slate-500' : ''}`}
+                                    style={{ height: `${pct}%` }}
+                                    title={`${day.fatSaturated}g gesättigt (Grenze ${day.satFatMaxG}g) · ${day.fatUnsaturated}g ungesättigt`}
+                                  />
+                                ) : (
+                                  <div className="w-full h-1 bg-slate-200 rounded-full" />
+                                )}
+                              </div>
+                              <span
+                                className="text-slate-500 text-center leading-tight select-none"
+                                style={{ fontSize: isWeek ? '11px' : '9px' }}
+                              >
+                                {isWeek
+                                  ? new Date(day.date + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short' })
+                                  : new Date(day.date + 'T12:00:00').getDate()
+                                }
+                              </span>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                    <div className="flex items-center gap-4 mt-3 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-8 h-0 border-t-2 border-dashed border-slate-400" />
+                        <span className="text-xs text-slate-400">Tagesgrenze</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded-sm bg-emerald-400" />
+                        <span className="text-xs text-slate-400">Im Ziel</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 rounded-sm bg-red-400" />
+                        <span className="text-xs text-slate-400">Über Ziel</span>
+                      </div>
+                    </div>
                   </div>
 
                   {/* ── Makros am Abend (ab 18 Uhr) pro Tag — Ernährung×Schlaf ── */}

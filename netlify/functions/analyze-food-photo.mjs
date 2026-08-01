@@ -54,7 +54,8 @@ Antworte NUR mit diesem JSON – kein Markdown, keine Kommentare:
       "protein": Zahl,
       "carbsComplex": Zahl (langkettige/komplexe Kohlenhydrate in g – Stärke aus Vollkorn, Hafer, Hülsenfrüchten, Kartoffeln, Gemüse etc., langsame Verdauung),
       "carbsSimple": Zahl (kurzkettige/einfache Kohlenhydrate in g – Zucker, Süßigkeiten, Weißmehl, Fruchtzucker, Honig, Softdrinks etc., schnelle Verdauung),
-      "fat": Zahl,
+      "fatSaturated": Zahl (gesättigte Fettsäuren in g – Butter, Käse, fettes Fleisch, Wurst, Kokosöl, Sahne, Palmöl etc., LDL-relevant),
+      "fatUnsaturated": Zahl (ungesättigte Fettsäuren in g – Olivenöl, Nüsse, Avocado, Fisch, Rapsöl etc.),
       "fiber": Zahl,
       "caffeine": Zahl (mg, 0 falls kein Koffein enthalten – z.B. Kaffee ~80mg/Tasse, Espresso ~63mg, Schwarztee ~40mg, Grüntee ~25mg, Cola ~30mg/330ml, Energy Drink ~80mg/250ml)
     }
@@ -107,20 +108,24 @@ Mikronährstoff-Einheiten: calcium/iron/magnesium/zinc/vitaminC/potassium in mg,
 
     const parsed = JSON.parse(jsonMatch[0]);
     const totals = (parsed.components || []).reduce((acc, c) => ({
-      kcal:         acc.kcal         + (c.kcal         || 0),
-      protein:      acc.protein      + (c.protein      || 0),
-      carbsComplex: acc.carbsComplex + (c.carbsComplex  || 0),
-      carbsSimple:  acc.carbsSimple  + (c.carbsSimple   || 0),
-      fat:          acc.fat          + (c.fat           || 0),
-      fiber:        acc.fiber        + (c.fiber         || 0),
-      caffeine:     acc.caffeine     + (c.caffeine      || 0),
-    }), { kcal: 0, protein: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fiber: 0, caffeine: 0 });
-    // carbs = Summe aus komplex + einfach – so bleibt der Gesamtwert konsistent mit dem
+      kcal:           acc.kcal           + (c.kcal           || 0),
+      protein:        acc.protein        + (c.protein        || 0),
+      carbsComplex:   acc.carbsComplex   + (c.carbsComplex    || 0),
+      carbsSimple:    acc.carbsSimple    + (c.carbsSimple     || 0),
+      fatSaturated:   acc.fatSaturated   + (c.fatSaturated    || 0),
+      fatUnsaturated: acc.fatUnsaturated + (c.fatUnsaturated  || 0),
+      fiber:          acc.fiber          + (c.fiber           || 0),
+      caffeine:       acc.caffeine       + (c.caffeine        || 0),
+    }), { kcal: 0, protein: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0, caffeine: 0 });
+    // carbs/fat = Summe aus den Teil-Werten – so bleibt der Gesamtwert konsistent mit dem
     // Split, statt eine dritte, potenziell abweichende KI-Schätzung zu übernehmen. Gilt
-    // auch pro Komponente, damit die Detail-Ansicht weiterhin einen carbs-Wert hat.
+    // auch pro Komponente, damit die Detail-Ansicht weiterhin carbs/fat-Werte hat.
     totals.carbs = Math.round((totals.carbsComplex + totals.carbsSimple) * 10) / 10;
+    totals.fat = Math.round((totals.fatSaturated + totals.fatUnsaturated) * 10) / 10;
     const componentsWithCarbs = (parsed.components || []).map(c => ({
-      ...c, carbs: Math.round(((c.carbsComplex || 0) + (c.carbsSimple || 0)) * 10) / 10,
+      ...c,
+      carbs: Math.round(((c.carbsComplex || 0) + (c.carbsSimple || 0)) * 10) / 10,
+      fat: Math.round(((c.fatSaturated || 0) + (c.fatUnsaturated || 0)) * 10) / 10,
     }));
 
     return Response.json({
