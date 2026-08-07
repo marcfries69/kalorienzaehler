@@ -1354,6 +1354,9 @@ const KalorienTracker = () => {
       fatSaturated:   acc.fatSaturated   + (meal.fatSaturated   || 0),
       fatUnsaturated: acc.fatUnsaturated + (meal.fatUnsaturated || 0),
       fiber:   acc.fiber   + (meal.fiber   || 0),
+      caffeine:       acc.caffeine       + (meal.caffeine || 0),
+      caffeineBefore13: acc.caffeineBefore13 + (meal.time < '13:00' ? (meal.caffeine || 0) : 0),
+      caffeineAfter13:  acc.caffeineAfter13  + (meal.time >= '13:00' ? (meal.caffeine || 0) : 0),
       calcium:    acc.calcium    + (mn.calcium    || 0),
       iron:       acc.iron       + (mn.iron       || 0),
       magnesium:  acc.magnesium  + (mn.magnesium  || 0),
@@ -1365,6 +1368,7 @@ const KalorienTracker = () => {
       folate:     acc.folate     + (mn.folate     || 0),
     };
   }, { kcal: 0, protein: 0, carbs: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0,
+       caffeine: 0, caffeineBefore13: 0, caffeineAfter13: 0,
        calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0,
        vitaminC: 0, vitaminD: 0, vitaminB12: 0, folate: 0 });
   // Whether at least one meal today has micronutrient data
@@ -2582,6 +2586,29 @@ ${trainingDays.filter(d => {
                   </div>
                 );
               })()}
+
+              {/* Koffein: gesamt sowie vor/nach 13 Uhr — spät konsumiertes Koffein kann den
+                  Schlaf stärker beeinträchtigen, daher separat ausgewiesen. */}
+              {totals.caffeine > 0 && (
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <span className="text-sm">☕</span>
+                    <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wide">Koffein</h3>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { label: 'Gesamt',   value: Math.round(totals.caffeine) },
+                      { label: 'Vor 13 Uhr', value: Math.round(totals.caffeineBefore13) },
+                      { label: 'Nach 13 Uhr', value: Math.round(totals.caffeineAfter13) },
+                    ].map(s => (
+                      <div key={s.label} className="bg-stone-50 border border-stone-200 rounded-lg px-2 py-1.5 text-center">
+                        <p className="text-[10px] text-stone-400 uppercase tracking-wide">{s.label}</p>
+                        <p className="text-sm font-bold text-stone-700 mono">{s.value}mg</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             );
             })()}
