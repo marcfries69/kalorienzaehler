@@ -57,7 +57,9 @@ Antworte NUR mit diesem JSON – kein Markdown, keine Kommentare:
       "fatSaturated": Zahl (gesättigte Fettsäuren in g – Butter, Käse, fettes Fleisch, Wurst, Kokosöl, Sahne, Palmöl etc., LDL-relevant),
       "fatUnsaturated": Zahl (ungesättigte Fettsäuren in g – Olivenöl, Nüsse, Avocado, Fisch, Rapsöl etc.),
       "fiber": Zahl,
-      "caffeine": Zahl (mg, 0 falls kein Koffein enthalten – z.B. Kaffee ~80mg/Tasse, Espresso ~63mg, Schwarztee ~40mg, Grüntee ~25mg, Cola ~30mg/330ml, Energy Drink ~80mg/250ml)
+      "caffeine": Zahl (mg, 0 falls kein Koffein enthalten – z.B. Kaffee ~80mg/Tasse, Espresso ~63mg, Schwarztee ~40mg, Grüntee ~25mg, Cola ~30mg/330ml, Energy Drink ~80mg/250ml),
+      "fruitG": Zahl (Menge Obst in dieser Komponente in g Frischgewicht, 0 falls kein Obst – Trockenfrüchte mit Faktor 3 auf Frischgewicht hochrechnen, kein Fruchtsaft),
+      "vegetableG": Zahl (Menge Gemüse/Salat in dieser Komponente in g, 0 falls kein Gemüse – Hülsenfrüchte zählen mit, Kartoffeln NICHT da stärkehaltige Beilage)
     }
   ],
   "micronutrients": {
@@ -116,7 +118,9 @@ Mikronährstoff-Einheiten: calcium/iron/magnesium/zinc/vitaminC/potassium in mg,
       fatUnsaturated: acc.fatUnsaturated + (c.fatUnsaturated  || 0),
       fiber:          acc.fiber          + (c.fiber           || 0),
       caffeine:       acc.caffeine       + (c.caffeine        || 0),
-    }), { kcal: 0, protein: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0, caffeine: 0 });
+      fruitG:         acc.fruitG         + (c.fruitG          || 0),
+      vegetableG:     acc.vegetableG     + (c.vegetableG       || 0),
+    }), { kcal: 0, protein: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0, caffeine: 0, fruitG: 0, vegetableG: 0 });
     // carbs/fat = Summe aus den Teil-Werten – so bleibt der Gesamtwert konsistent mit dem
     // Split, statt eine dritte, potenziell abweichende KI-Schätzung zu übernehmen. Gilt
     // auch pro Komponente, damit die Detail-Ansicht weiterhin carbs/fat-Werte hat.

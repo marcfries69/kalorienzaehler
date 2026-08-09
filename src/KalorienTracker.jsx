@@ -884,7 +884,9 @@ const KalorienTracker = () => {
       carbsSimple:  acc.carbsSimple  + (m.carbsSimple  || 0),
       fatSaturated:   acc.fatSaturated   + (m.fatSaturated   || 0),
       fatUnsaturated: acc.fatUnsaturated + (m.fatUnsaturated || 0),
-    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0 });
+      fruit:     acc.fruit     + (m.fruitG     || 0),
+      vegetable: acc.vegetable + (m.vegetableG || 0),
+    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0, fruit: 0, vegetable: 0 });
     return {
       user_id: NUTRITION_USER_ID, date: dateKey,
       total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
@@ -895,6 +897,8 @@ const KalorienTracker = () => {
       carbs_simple_g:  Math.round(totals.carbsSimple  * 10) / 10,
       fat_saturated_g:   Math.round(totals.fatSaturated   * 10) / 10,
       fat_unsaturated_g: Math.round(totals.fatUnsaturated * 10) / 10,
+      fruit_g:     Math.round(totals.fruit),
+      vegetable_g: Math.round(totals.vegetable),
       kcal_goal: goal,
       meals: meals || [],   // volle Objekte – Grundlage für Multi-Device-Sync
       updated_at: ts,
@@ -1391,6 +1395,8 @@ const KalorienTracker = () => {
       caffeine:       acc.caffeine       + (meal.caffeine || 0),
       caffeineBefore13: acc.caffeineBefore13 + (meal.time < '13:00' ? (meal.caffeine || 0) : 0),
       caffeineAfter13:  acc.caffeineAfter13  + (meal.time >= '13:00' ? (meal.caffeine || 0) : 0),
+      fruit:     acc.fruit     + (meal.fruitG     || 0),
+      vegetable: acc.vegetable + (meal.vegetableG || 0),
       calcium:    acc.calcium    + (mn.calcium    || 0),
       iron:       acc.iron       + (mn.iron       || 0),
       magnesium:  acc.magnesium  + (mn.magnesium  || 0),
@@ -1402,7 +1408,7 @@ const KalorienTracker = () => {
       folate:     acc.folate     + (mn.folate     || 0),
     };
   }, { kcal: 0, protein: 0, carbs: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0,
-       caffeine: 0, caffeineBefore13: 0, caffeineAfter13: 0,
+       caffeine: 0, caffeineBefore13: 0, caffeineAfter13: 0, fruit: 0, vegetable: 0,
        calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0,
        vitaminC: 0, vitaminD: 0, vitaminB12: 0, folate: 0 });
   // Whether at least one meal today has micronutrient data
@@ -2706,6 +2712,40 @@ ${trainingDays.filter(d => {
                   </div>
                 </div>
               )}
+
+              {/* Obst & Gemüse: getrennt und in Summe, Ampel ab 750g gesamt (grün). */}
+              {(totals.fruit > 0 || totals.vegetable > 0) && (() => {
+                const sum = Math.round(totals.fruit + totals.vegetable);
+                const reached = sum >= 750;
+                return (
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className={`flex items-center justify-between rounded-xl px-4 py-3 border bg-gradient-to-br ${
+                      reached ? 'from-emerald-50 to-teal-50 border-emerald-200' : 'from-slate-50 to-stone-50 border-slate-200'
+                    }`}>
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">🥦</span>
+                        <div>
+                          <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Obst &amp; Gemüse heute</p>
+                          <p className={`text-xs font-medium ${reached ? 'text-emerald-700' : 'text-slate-400'}`}>
+                            {reached ? '✓ 750g-Ziel erreicht' : `noch ${750 - sum}g bis 750g`}
+                          </p>
+                        </div>
+                      </div>
+                      <p className={`text-2xl font-bold mono ${reached ? 'text-emerald-700' : 'text-slate-700'}`}>{sum}g</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <div className="bg-orange-50 border border-orange-100 rounded-lg px-2 py-1.5 text-center">
+                        <p className="text-[10px] text-orange-400 uppercase tracking-wide">Obst</p>
+                        <p className="text-sm font-bold text-orange-700 mono">{Math.round(totals.fruit)}g</p>
+                      </div>
+                      <div className="bg-green-50 border border-green-100 rounded-lg px-2 py-1.5 text-center">
+                        <p className="text-[10px] text-green-500 uppercase tracking-wide">Gemüse</p>
+                        <p className="text-sm font-bold text-green-700 mono">{Math.round(totals.vegetable)}g</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Gesättigte Fettsäuren: prominente Tages-Ampel mit festen Grenzwerten
                   (LDL-Ziel) — bewusst absolut in Gramm statt prozentual wie die Fett-Karte
