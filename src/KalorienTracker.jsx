@@ -3124,7 +3124,14 @@ ${trainingDays.filter(d => {
                             )}
                             <span className="px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium mono">P: {Math.round(meal.protein)}g</span>
                             <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium mono" title={`komplex ${Math.round(meal.carbsComplex || 0)}g · einfach ${Math.round(meal.carbsSimple || 0)}g`}>K: {Math.round(meal.carbs)}g</span>
-                            <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono" title={`gesättigt ${Math.round(meal.fatSaturated || 0)}g · ungesättigt ${Math.round(meal.fatUnsaturated || 0)}g`}>F: {Math.round(meal.fat)}g</span>
+                            <span className="px-3 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-medium mono flex items-center gap-1" title={`ungesättigt ${Math.round(meal.fatUnsaturated || 0)}g`}>
+                              F: {Math.round(meal.fat)}g
+                              {meal.fatSaturated > 0 && (
+                                <span className={meal.fatSaturated > 10 ? 'text-red-600 font-bold' : 'text-purple-500'}>
+                                  · {Math.round(meal.fatSaturated)}g ges.
+                                </span>
+                              )}
+                            </span>
                             {meal.caffeine > 0 && (
                               <span className="px-3 py-1 rounded-full bg-stone-200 text-stone-700 text-xs font-medium mono">☕ {Math.round(meal.caffeine)}mg</span>
                             )}
