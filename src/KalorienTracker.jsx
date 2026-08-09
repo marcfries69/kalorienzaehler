@@ -24,7 +24,7 @@ const toDateKey = (d) => {
   return `${year}-${month}-${day}`;
 };
 
-// ── Ernährungsberater: die 7 Zieldimensionen aus der KI-Antwort (siehe
+// ── Ernährungsberater: die 8 Zieldimensionen aus der KI-Antwort (siehe
 // netlify/functions/lib/nutritionAdvisor.mjs) ─────────────────────────────
 const ADVISOR_GOALS = [
   { key: 'performance', label: 'Performance (FTP/VO2max)' },
@@ -34,6 +34,7 @@ const ADVISOR_GOALS = [
   { key: 'sleep',       label: 'Schlaf' },
   { key: 'apoB',        label: 'ApoB / LDL' },
   { key: 'weightLoss',  label: 'Gewicht' },
+  { key: 'foodQuality', label: 'Lebensmittelqualität' },
 ];
 const advisorStatusTone = (status) => ({
   gut:      { bg: 'bg-emerald-50 border-emerald-200', badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-800' },
@@ -5278,6 +5279,7 @@ ${trainingDays.filter(d => {
           performance: <Zap className="w-4 h-4" />, muscleBuild: <Dumbbell className="w-4 h-4" />,
           recovery: <Activity className="w-4 h-4" />, immune: <HeartPulse className="w-4 h-4" />,
           sleep: <Moon className="w-4 h-4" />, apoB: <Droplets className="w-4 h-4" />, weightLoss: <Scale className="w-4 h-4" />,
+          foodQuality: <Utensils className="w-4 h-4" />,
         };
         return (
         <div className="space-y-4">

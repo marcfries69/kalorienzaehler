@@ -161,6 +161,20 @@ function aggregate(data) {
     .filter(m => !m.isAutoCorrection && m.time >= '13:00')
     .reduce((s, m) => s + (m.caffeine || 0), 0)
 
+  // Lebensmittelqualität: healthScore (1=sehr gesund/unverarbeitet … 6=sehr ungesund/stark
+  // verarbeitet) wird schon pro Mahlzeit von der Foto-/Text-Analyse vergeben und in nutrition_log
+  // mitgespeichert — hier nur aggregiert, keine neue KI-Bewertung nötig.
+  const allMeals = n.flatMap(r => (r.meals || []).filter(m => !m.isAutoCorrection && m.healthScore != null))
+  const foodQuality = allMeals.length ? {
+    mealsRated: allMeals.length,
+    avgHealthScore: avg(allMeals.map(m => m.healthScore)),
+    processedCount: allMeals.filter(m => m.healthScore >= 5).length,
+    processedPct: Math.round((allMeals.filter(m => m.healthScore >= 5).length / allMeals.length) * 100),
+    worstExamples: [...allMeals].sort((a, b) => b.healthScore - a.healthScore)
+      .filter((m, i, arr) => arr.findIndex(x => x.name === m.name) === i)
+      .slice(0, 6).map(m => `${m.name} (${m.healthScore}/6)`),
+  } : null
+
   const nutrition = n.length ? {
     days: n.length,
     kcalAvg: avg(n.map(r => r.total_kcal || 0)),
@@ -210,7 +224,7 @@ function aggregate(data) {
     return { hrvAvg: avg(hrv), recoveryScoreAvg: avg(recScore), sleepEfficiencyAvg: avg(sleepEff), windowDays: RECOVERY_WINDOW_DAYS }
   })()
 
-  return { nutrition, bodyComp, blood, vo2max: data.vo2max, recovery, excludedSickDays: data.excludedSickDays }
+  return { nutrition, foodQuality, bodyComp, blood, vo2max: data.vo2max, recovery, excludedSickDays: data.excludedSickDays }
 }
 
 // ── Prompt ───────────────────────────────────────────────────────────────────
@@ -236,16 +250,23 @@ function buildPrompt(agg) {
     ? agg.blood.map(b => `${b.name}: ${b.value} ${b.unit || ''} (${b.status || 'kein Status'}, vom ${b.date})`).join('\n')
     : 'Keine relevanten Blutwerte (ApoB/LDL/HDL/Cholesterin) vorhanden.'
 
+  const foodQualityBlock = agg.foodQuality
+    ? `Ø Health-Score ${agg.foodQuality.avgHealthScore}/6 (1=sehr gesund/unverarbeitet, 6=sehr ungesund/stark verarbeitet), aus ${agg.foodQuality.mealsRated} bewerteten Mahlzeiten. ${agg.foodQuality.processedCount} Mahlzeiten (${agg.foodQuality.processedPct}%) mit Score ≥5 (ungesund/stark verarbeitet).${agg.foodQuality.worstExamples.length ? `\nSchlechteste bewertete Mahlzeiten im Zeitraum: ${agg.foodQuality.worstExamples.join(', ')}` : ''}`
+    : 'Keine Health-Score-Daten zu den einzelnen Mahlzeiten vorhanden.'
+
   const vo2maxBlock = agg.vo2max != null ? `VO2max (aktuell hinterlegt): ${agg.vo2max} ml/kg/min` : 'Kein VO2max-Wert hinterlegt.'
 
   const recoveryBlock = agg.recovery
     ? `Ø letzte ${agg.recovery.windowDays} Tage: HRV ${agg.recovery.hrvAvg ?? '–'}, Recovery/Readiness-Score ${agg.recovery.recoveryScoreAvg ?? '–'}, Schlafeffizienz ${agg.recovery.sleepEfficiencyAvg ?? '–'}%`
     : 'Keine Oura/Whoop-Daten verfügbar.'
 
-  return `Du bist ein sportmedizinisch versierter Ernährungsberater für einen ambitionierten Ausdauerathleten (Triathlon). Bewerte seine Ernährung anhand der folgenden Daten gegen SEINE 7 explizit genannten Ziele. Sei konkret und datenbasiert — jede Empfehlung muss sich auf eine der unten stehenden Zahlen beziehen, keine generischen Ernährungstipps.
+  return `Du bist ein sportmedizinisch versierter Ernährungsberater für einen ambitionierten Ausdauerathleten (Triathlon). Bewerte seine Ernährung anhand der folgenden Daten gegen SEINE 8 explizit genannten Ziele. Sei konkret und datenbasiert — jede Empfehlung muss sich auf eine der unten stehenden Zahlen beziehen, keine generischen Ernährungstipps.
 
 ERNÄHRUNG:
 ${nutritionBlock}
+
+LEBENSMITTELQUALITÄT (Health-Score je Mahlzeit, bereits bei der Erfassung von der Foto-/Text-Analyse vergeben):
+${foodQualityBlock}
 
 KÖRPERKOMPOSITION:
 ${bodyBlock}
@@ -259,7 +280,7 @@ ${vo2maxBlock}
 SCHLAF/REGENERATION (Oura/Whoop):
 ${recoveryBlock}
 
-SEINE 7 ZIELE (in dieser Reihenfolge bewerten):
+SEINE 8 ZIELE (in dieser Reihenfolge bewerten):
 1. performance — Sport-Performance verbessern (FTP & VO2max)
 2. muscleBuild — Muskeln aufbauen
 3. recovery — bessere Regeneration
@@ -267,6 +288,7 @@ SEINE 7 ZIELE (in dieser Reihenfolge bewerten):
 5. sleep — guter Schlaf
 6. apoB — niedriges ApoB-Cholesterin
 7. weightLoss — Gewicht leicht reduzieren
+8. foodQuality — Lebensmittelqualität für Longevity: möglichst wenig hochverarbeitete Lebensmittel, hohe Nährstoffdichte (Vollwertkost, Gemüse, gute Proteinquellen), möglichst wenig gesättigte Fette. Nutze explizit den Health-Score und die genannten Beispiel-Mahlzeiten oben — benenne konkrete Lebensmittel/Muster, die ersetzt werden sollten, nicht nur die Zahl.
 
 WICHTIG: Mehrere dieser Ziele stehen im Konflikt (z.B. Kaloriendefizit vs. Muskelaufbau vs. Performance). Wäge das explizit ab statt die Ziele isoliert zu betrachten — wenn ein Zielkonflikt besteht, benenne ihn und schlage einen Kompromiss vor (z.B. Defizit nur an Ruhetagen, volle Energie an harten Einheiten).
 
@@ -282,7 +304,8 @@ Antworte NUR mit diesem JSON (kein Markdown, keine Kommentare):
     "immune":       {"status":"...","assessment":"...","actions":["...","..."]},
     "sleep":        {"status":"...","assessment":"...","actions":["...","..."]},
     "apoB":         {"status":"...","assessment":"...","actions":["...","..."]},
-    "weightLoss":   {"status":"...","assessment":"...","actions":["...","..."]}
+    "weightLoss":   {"status":"...","assessment":"...","actions":["...","..."]},
+    "foodQuality":  {"status":"...","assessment":"...","actions":["...","..."]}
   },
   "conflicts": "1-2 Sätze zu Zielkonflikten und wie sie aufgelöst werden sollten, leer falls keiner erkennbar",
   "topPriorities": ["Priorität 1 diese Woche","Priorität 2","Priorität 3"]
