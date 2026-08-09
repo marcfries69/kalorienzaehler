@@ -3,7 +3,7 @@ import {
   Loader2, Send, Plus, Trash2, Flame, ChevronDown, Calculator,
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
   Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind,
-  Cloud, CloudOff, Camera, ImagePlus, Moon, Thermometer, Search, Info, HeartPulse,
+  Cloud, CloudOff, Camera, ImagePlus, Moon, Thermometer, Search, Info, HeartPulse, Stethoscope,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -23,6 +23,23 @@ const toDateKey = (d) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+// ── Ernährungsberater: die 7 Zieldimensionen aus der KI-Antwort (siehe
+// netlify/functions/lib/nutritionAdvisor.mjs) ─────────────────────────────
+const ADVISOR_GOALS = [
+  { key: 'performance', label: 'Performance (FTP/VO2max)' },
+  { key: 'muscleBuild', label: 'Muskelaufbau' },
+  { key: 'recovery',    label: 'Regeneration' },
+  { key: 'immune',      label: 'Immunsystem' },
+  { key: 'sleep',       label: 'Schlaf' },
+  { key: 'apoB',        label: 'ApoB / LDL' },
+  { key: 'weightLoss',  label: 'Gewicht' },
+];
+const advisorStatusTone = (status) => ({
+  gut:      { bg: 'bg-emerald-50 border-emerald-200', badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-800' },
+  beachten: { bg: 'bg-amber-50 border-amber-200',      badge: 'bg-amber-100 text-amber-700',      text: 'text-amber-800' },
+  kritisch: { bg: 'bg-rose-50 border-rose-200',        badge: 'bg-rose-100 text-rose-700',        text: 'text-rose-800' },
+}[status] || { bg: 'bg-slate-50 border-slate-200', badge: 'bg-slate-200 text-slate-500', text: 'text-slate-600' });
 
 // ── Körper-Fotos: lokale Speicherung via IndexedDB ────────────────────────────
 // Fotos sind sensible Daten – bewusst NICHT in einer Cloud-Datenbank abgelegt,
@@ -278,6 +295,12 @@ const KalorienTracker = () => {
   const [deepStatus, setDeepStatus] = useState(null); // null | 'running' | 'done' | 'error'
   const [deepResult, setDeepResult] = useState(null);
   const [deepError, setDeepError] = useState(null);
+  // ── Ernährungsberater ("Berater"-Tab) ────────────────────────────────────
+  const [advisorResult, setAdvisorResult] = useState(null);
+  const [advisorMeta, setAdvisorMeta] = useState(null); // { generatedAt, trigger }
+  const [advisorLoadingInitial, setAdvisorLoadingInitial] = useState(false);
+  const [advisorStatus, setAdvisorStatus] = useState(null); // null | 'running' | 'error'
+  const [advisorError, setAdvisorError] = useState(null);
   const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | 'ok' | 'error'
   const [syncError, setSyncError] = useState(null);
   const [trainingSyncError, setTrainingSyncError] = useState(null);
@@ -2055,6 +2078,58 @@ const KalorienTracker = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
+  // ── Ernährungsberater ─────────────────────────────────────────────────────
+  const loadAdvisorLatest = async () => {
+    setAdvisorLoadingInitial(true);
+    try {
+      const { data } = await sbClient.from('nutrition_advisor_results')
+        .select('result, generated_at, trigger').eq('user_id', NUTRITION_USER_ID).maybeSingle();
+      if (data) {
+        setAdvisorResult(data.result);
+        setAdvisorMeta({ generatedAt: data.generated_at, trigger: data.trigger });
+      }
+    } finally { setAdvisorLoadingInitial(false); }
+  };
+
+  const runAdvisor = async () => {
+    setAdvisorStatus('running'); setAdvisorError(null);
+    try {
+      const jobId = crypto.randomUUID();
+      await sbClient.from('analysis_jobs').insert({
+        id: jobId, user_id: NUTRITION_USER_ID, status: 'pending',
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      });
+      const trigger = await fetch('/.netlify/functions/nutrition-advisor-background', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }),
+      });
+      if (!trigger.ok && trigger.status !== 202) throw new Error(`Server-Fehler (${trigger.status})`);
+
+      const started = Date.now();
+      while (Date.now() - started < 5 * 60 * 1000) {
+        await new Promise(r => setTimeout(r, 2500));
+        const { data: job } = await sbClient.from('analysis_jobs').select('status, result, error').eq('id', jobId).single();
+        if (!job || job.status === 'pending' || job.status === 'processing') continue;
+        if (job.status === 'error') throw new Error(job.error || 'Bewertung fehlgeschlagen');
+        if (job.status === 'done') {
+          setAdvisorResult(job.result);
+          setAdvisorMeta({ generatedAt: new Date().toISOString(), trigger: 'manual' });
+          setAdvisorStatus(null);
+          return;
+        }
+      }
+      throw new Error('Zeitüberschreitung — die Bewertung dauert ungewöhnlich lange.');
+    } catch (err) {
+      setAdvisorError(err.message); setAdvisorStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'berater' && !advisorResult && !advisorLoadingInitial) {
+      loadAdvisorLatest();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
   // ── Water UI ─────────────────────────────────────────────────────────────────
   const waterPct = Math.min((currentWater / 3) * 100, 100);
   const waterBarColor =
@@ -2285,6 +2360,7 @@ ${trainingDays.filter(d => {
             { key: 'coach', icon: <Brain      className="w-4 h-4" />, label: 'Coach' },
             { key: 'rad',   icon: <Bike       className="w-4 h-4" />, label: 'Rad'   },
             { key: 'schlaf', icon: <Moon      className="w-4 h-4" />, label: 'Schlaf' },
+            { key: 'berater', icon: <Stethoscope className="w-4 h-4" />, label: 'Berater' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -5171,6 +5247,113 @@ ${trainingDays.filter(d => {
           </div>
         </div>
       )}
+
+      {activeTab === 'berater' && (() => {
+        const goalIcons = {
+          performance: <Zap className="w-4 h-4" />, muscleBuild: <Dumbbell className="w-4 h-4" />,
+          recovery: <Activity className="w-4 h-4" />, immune: <HeartPulse className="w-4 h-4" />,
+          sleep: <Moon className="w-4 h-4" />, apoB: <Droplets className="w-4 h-4" />, weightLoss: <Scale className="w-4 h-4" />,
+        };
+        return (
+        <div className="space-y-4">
+          <div className="glass rounded-3xl p-6 shadow-xl">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2 mb-1">
+                  <Stethoscope className="w-5 h-5 text-teal-500" /> Ernährungsberater
+                </h2>
+                <p className="text-sm text-slate-400">Bewertet deine Ernährung gegen Performance (FTP/VO2max), Muskelaufbau, Regeneration, Immunsystem, Schlaf, ApoB und dein Gewichtsziel.</p>
+              </div>
+              <button onClick={runAdvisor} disabled={advisorStatus === 'running'}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-500 hover:bg-teal-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex-shrink-0">
+                {advisorStatus === 'running' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                {advisorStatus === 'running' ? 'Bewerte…' : 'Jetzt bewerten'}
+              </button>
+            </div>
+            {advisorMeta?.generatedAt && (
+              <p className="text-xs text-slate-400 mt-3">
+                Letzte Bewertung: {new Date(advisorMeta.generatedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                {' · '}{advisorMeta.trigger === 'weekly' ? 'automatisch (wöchentlich)' : 'manuell'}
+              </p>
+            )}
+          </div>
+
+          {advisorError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-600 text-sm">{advisorError}</div>
+          )}
+
+          {advisorLoadingInitial && !advisorResult && (
+            <div className="flex items-center gap-2 text-slate-400 text-sm py-6 justify-center">
+              <Loader2 className="w-4 h-4 animate-spin" /> Lade letzte Bewertung…
+            </div>
+          )}
+
+          {!advisorResult && !advisorLoadingInitial && advisorStatus !== 'running' && (
+            <div className="glass rounded-3xl p-6 shadow-xl text-center text-sm text-slate-400">
+              Noch keine Bewertung vorhanden — auf "Jetzt bewerten" klicken oder auf den automatischen wöchentlichen Lauf (montags) warten.
+            </div>
+          )}
+
+          {advisorResult && !advisorResult.goals && (
+            <div className="glass rounded-3xl p-6 shadow-xl text-sm text-slate-600">{advisorResult.summary}</div>
+          )}
+
+          {advisorResult?.goals && (
+            <>
+              <div className="glass rounded-3xl p-5 shadow-xl">
+                <p className="text-sm text-slate-700">{advisorResult.summary}</p>
+                {advisorResult.conflicts && (
+                  <div className="mt-3 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+                    <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>{advisorResult.conflicts}</span>
+                  </div>
+                )}
+              </div>
+
+              {advisorResult.topPriorities?.length > 0 && (
+                <div className="glass rounded-3xl p-5 shadow-xl">
+                  <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4 text-teal-500" /> Top-Prioritäten diese Woche</h3>
+                  <div className="space-y-2">
+                    {advisorResult.topPriorities.map((p, i) => (
+                      <div key={i} className="flex items-start gap-2.5 bg-teal-50 border border-teal-200 rounded-lg p-3 text-sm text-teal-800">
+                        <span className="font-bold text-teal-500">{i + 1}.</span>
+                        <span>{p}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                {ADVISOR_GOALS.map(g => {
+                  const goal = advisorResult.goals[g.key];
+                  if (!goal) return null;
+                  const tone = advisorStatusTone(goal.status);
+                  return (
+                    <div key={g.key} className={`rounded-2xl p-4 border ${tone.bg}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">{goalIcons[g.key]} {g.label}</span>
+                        <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${tone.badge}`}>{goal.status}</span>
+                      </div>
+                      <p className={`text-xs ${tone.text} mb-2`}>{goal.assessment}</p>
+                      {goal.actions?.length > 0 && (
+                        <ul className="space-y-1">
+                          {goal.actions.map((a, i) => (
+                            <li key={i} className="text-xs text-slate-600 flex items-start gap-1.5">
+                              <span className="text-slate-400 mt-0.5">→</span><span>{a}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+        );
+      })()}
 
       {/* ════════════════════════════════════════════════════════════════════════ */}
       {/* MEAL SUGGESTIONS MODAL                                                    */}

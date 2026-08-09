@@ -33,7 +33,11 @@
 [functions."nutrition-sleep-quick"]
   timeout = 26
 
-# correlate-nutrition-sleep-background ist eine Background-Function (kein Timeout nötig)
+[functions."nutrition-advisor-weekly"]
+  timeout = 26
+
+# correlate-nutrition-sleep-background und nutrition-advisor-background sind
+# Background-Functions (kein Timeout nötig)
 
 [[redirects]]
   from = "/*"
