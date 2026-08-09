@@ -26,6 +26,8 @@ const RECOVERY_WINDOW_DAYS = 7
 // Muss mit DEFAULT_RULES in src/KalorienTracker.jsx synchron gehalten werden
 // (Server hat keinen Zugriff auf die client-seitig versionierten Regeln).
 const RULES = {
+  kcalRestBase: 1900,
+  maintenanceBase: 2100,
   referenceDeficit: 200,
   satFatMaxPct: 7,
   fiberGoal: 35,
@@ -232,14 +234,16 @@ function buildPrompt(agg) {
   const n = agg.nutrition
   const nutritionBlock = n
     ? `Ø letzte ${n.days} Tage (Krankheitstage ausgeschlossen${agg.excludedSickDays ? `, ${agg.excludedSickDays} Tage ausgeschlossen` : ''}):
-- Kalorien: ${n.kcalAvg} kcal (Ziel Ø ${n.kcalGoalAvg} kcal)
+- Kalorien: ${n.kcalAvg} kcal (tatsächliches Tagesziel im Schnitt: ${n.kcalGoalAvg} kcal — dieses Ziel schwankt schon TAG FÜR TAG mit dem Training, siehe Kalorienziel-Mechanik unten)
 - Protein: ${n.proteinAvg} g
 - Kohlenhydrate: ${n.carbsComplexAvg} g komplex + ${n.carbsSimpleAvg} g einfach
 - Fett: ${n.fatSaturatedAvg} g gesättigt (Grenze für LDL-Ziel: ${RULES.satFatMaxPct}% der Kalorien) + ${n.fatUnsaturatedAvg} g ungesättigt
 - Ballaststoffe: ${n.fiberAvg} g (Ziel ${RULES.fiberGoal} g)
 - Koffein: Ø ${n.caffeineAvg} mg/Tag, davon Ø ${n.caffeineAfter13Avg} mg nach 13 Uhr
 - Abend (ab 18 Uhr): Ø ${n.eveningKcalAvg} kcal, ${n.eveningProteinAvg} g Protein
-- Referenz-Trainingsziele: ${RULES.macroTrain.protein}g Protein / ${RULES.macroTrain.carbs}g Carbs / ${RULES.macroTrain.fat}g Fett, Ziel-Defizit ${RULES.referenceDeficit} kcal an Ruhetagen`
+- Referenz-Trainingsziele: ${RULES.macroTrain.protein}g Protein / ${RULES.macroTrain.carbs}g Carbs / ${RULES.macroTrain.fat}g Fett
+
+KALORIENZIEL-MECHANIK (wichtig, um das Ziel richtig einzuordnen): Basis an Ruhetagen ${RULES.kcalRestBase} kcal, Erhaltungskalorien ${RULES.maintenanceBase} kcal. An JEDEM Trainingstag wird das Tagesziel automatisch 1:1 um die vollen an dem Tag verbrannten Trainingskalorien erhöht (keine Kürzung, kein Deckel) — das Ziel ist also bewusst kein fixer Wert, sondern steigt mit der Trainingslast. Das Defizit bleibt dadurch an JEDEM Tag konstant bei ${RULES.referenceDeficit} kcal, egal wie viel trainiert wurde. Der Ruhetag-Basiswert (${RULES.kcalRestBase} kcal) ist absichtlich niedrig gewählt und KEIN Hinweis auf zu wenig Energiezufuhr — bewerte ausschließlich das oben genannte tatsächliche Ø-Tagesziel (${n.kcalGoalAvg} kcal) im Vergleich zur Ø-Kalorienaufnahme, nicht die Ruhetag-Basis.`
     : 'Keine Ernährungsdaten im Zeitraum vorhanden.'
 
   const bodyBlock = agg.bodyComp
@@ -288,7 +292,7 @@ SEINE 8 ZIELE (in dieser Reihenfolge bewerten):
 5. sleep — guter Schlaf
 6. apoB — niedriges ApoB-Cholesterin
 7. weightLoss — Gewicht leicht reduzieren
-8. foodQuality — Lebensmittelqualität für Longevity: möglichst wenig hochverarbeitete Lebensmittel, hohe Nährstoffdichte (Vollwertkost, Gemüse, gute Proteinquellen), möglichst wenig gesättigte Fette. Nutze explizit den Health-Score und die genannten Beispiel-Mahlzeiten oben — benenne konkrete Lebensmittel/Muster, die ersetzt werden sollten, nicht nur die Zahl.
+8. foodQuality — Lebensmittelqualität für Longevity: möglichst wenig hochverarbeitete Lebensmittel, hohe Nährstoffdichte (Vollwertkost, Gemüse, gute Proteinquellen), möglichst wenig gesättigte Fette. Nutze explizit den Health-Score und die genannten Beispiel-Mahlzeiten oben — benenne konkrete Lebensmittel/Muster, die ersetzt werden sollten, nicht nur die Zahl. WICHTIGE AUSNAHME: Sportnahrung während/kurz um Trainingseinheiten (Gels, isotonische Getränke, Sportriegel, Bananen, Maltodextrin, schnelle Kohlenhydrate zur Wettkampf-/Trainingsversorgung) ist bei einem Ausdauerathleten funktional sinnvoll und darf NICHT als schlechte Ernährung gewertet werden, selbst wenn der automatisch vergebene Health-Score niedrig ist (der Score kennt den Trainingskontext nicht). Erkenne solche Fälle an Name/Beschreibung der Mahlzeit und schließe sie aus der Bewertung aus — flagge nur Muster, die klar NICHT trainingsbezogen sind (z.B. Fast Food, Süßigkeiten, Snacks im Alltag ohne erkennbaren Sportbezug).
 
 WICHTIG: Mehrere dieser Ziele stehen im Konflikt (z.B. Kaloriendefizit vs. Muskelaufbau vs. Performance). Wäge das explizit ab statt die Ziele isoliert zu betrachten — wenn ein Zielkonflikt besteht, benenne ihn und schlage einen Kompromiss vor (z.B. Defizit nur an Ruhetagen, volle Energie an harten Einheiten).
 
