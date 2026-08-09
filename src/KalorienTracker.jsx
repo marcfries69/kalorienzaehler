@@ -2706,6 +2706,32 @@ ${trainingDays.filter(d => {
                   </div>
                 </div>
               )}
+
+              {/* Gesättigte Fettsäuren: prominente Tages-Ampel mit festen Grenzwerten
+                  (LDL-Ziel) — bewusst absolut in Gramm statt prozentual wie die Fett-Karte
+                  oben, damit auf einen Blick klar ist, ob der Tag kritisch ist. */}
+              {totals.fatSaturated > 0 && (() => {
+                const satFat = Math.round(totals.fatSaturated);
+                const tone = satFat > 20
+                  ? { bg: 'from-rose-50 to-red-50', border: 'border-rose-300', dot: 'bg-rose-500', text: 'text-rose-700', label: 'Zu hoch für LDL-Ziel' }
+                  : satFat > 15
+                    ? { bg: 'from-amber-50 to-yellow-50', border: 'border-amber-300', dot: 'bg-amber-500', text: 'text-amber-700', label: 'Erhöht — im Blick behalten' }
+                    : { bg: 'from-emerald-50 to-teal-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', label: 'Im grünen Bereich' };
+                return (
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className={`flex items-center justify-between rounded-xl px-4 py-3 border bg-gradient-to-br ${tone.bg} ${tone.border}`}>
+                      <div className="flex items-center gap-3">
+                        <span className={`w-3 h-3 rounded-full flex-shrink-0 ${tone.dot} ${satFat > 20 ? 'animate-pulse' : ''}`} />
+                        <div>
+                          <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Gesättigte Fettsäuren heute</p>
+                          <p className={`text-xs font-medium ${tone.text}`}>{tone.label}</p>
+                        </div>
+                      </div>
+                      <p className={`text-2xl font-bold mono ${tone.text}`}>{satFat}g</p>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             );
             })()}
