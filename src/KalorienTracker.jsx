@@ -627,7 +627,9 @@ const KalorienTracker = () => {
     docL.setFillColor(168, 85, 247);  docL.rect(150, ly-3, 5, 4, 'F'); docL.text(`Fett: Ø ${Math.round(avg.fat/n)}g`, 157, ly);
     docL.setFillColor(22, 163, 74);   docL.rect(220, ly-3, 5, 4, 'F'); docL.text(`Sport: Ø ${Math.round(avg.sport/n)} kcal/Tag`, 227, ly);
 
-    // ── Detail-Anhang: alle Mahlzeiten pro Tag ────────────────────────────────
+    // ── Detail-Anhang: alle Mahlzeiten pro Tag, inkl. Koffein, gesättigt/ungesättigt
+    //    Fett, komplex/einfach Carbs, Obst/Gemüse und Tagesverteilung (vor/ab 18 Uhr) —
+    //    nur wenn explizit über "Alle Mahlzeiten im Detail" ausgewählt. ────────────────
     if (includeMeals) {
       const detailRows = [];
       days14.forEach(dateKey => {
@@ -635,12 +637,18 @@ const KalorienTracker = () => {
         if (meals.length === 0) return;
         const dayLabel = new Date(dateKey + 'T12:00:00').toLocaleDateString('de-DE',
           { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
-        const dayKcal = Math.round(meals.reduce((s, m) => s + (m.kcal || 0), 0));
-        // Tages-Header-Zeile (volle Breite)
+        const realMeals = meals.filter(m => !m.isAutoCorrection);
+        const dayKcal      = Math.round(meals.reduce((s, m) => s + (m.kcal || 0), 0));
+        const eveningKcal  = Math.round(realMeals.filter(m => m.time >= '18:00').reduce((s, m) => s + (m.kcal || 0), 0));
+        const dayCaffeine  = Math.round(realMeals.reduce((s, m) => s + (m.caffeine || 0), 0));
+        const daySatFat    = Math.round(realMeals.reduce((s, m) => s + (m.fatSaturated || 0), 0));
+        const dayFruit     = Math.round(realMeals.reduce((s, m) => s + (m.fruitG || 0), 0));
+        const dayVeg       = Math.round(realMeals.reduce((s, m) => s + (m.vegetableG || 0), 0));
+        // Tages-Header-Zeile (volle Breite) — Tagesverteilung + Tages-Summen der neueren Kennzahlen
         detailRows.push([{
-          content: `${dayLabel}   ·   ${dayKcal} kcal gesamt`,
-          colSpan: 8,
-          styles: { fillColor: [224, 242, 241], textColor: [15, 118, 110], fontStyle: 'bold', fontSize: 8 },
+          content: `${dayLabel}   ·   ${dayKcal} kcal gesamt   ·   Verteilung: ${dayKcal - eveningKcal} kcal vor 18 Uhr / ${eveningKcal} kcal ab 18 Uhr   ·   Koffein ${dayCaffeine}mg   ·   Gesättigtes Fett ${daySatFat}g   ·   Obst/Gemüse ${dayFruit}g/${dayVeg}g`,
+          colSpan: 10,
+          styles: { fillColor: [224, 242, 241], textColor: [15, 118, 110], fontStyle: 'bold', fontSize: 7.5 },
         }]);
         meals.forEach(m => {
           const comps = Array.isArray(m.components) && m.components.length > 0
@@ -651,14 +659,23 @@ const KalorienTracker = () => {
           const name = m.isAutoCorrection
             ? 'Auto-Korrektur (Tag nicht erfasst, geschätzt)'
             : `${m.name || m.text || '–'}${comps}`;
+          const carbsCell = (m.carbsComplex != null || m.carbsSimple != null)
+            ? `${Math.round(m.carbs || 0) || 0}\n(${Math.round(m.carbsComplex || 0)}/${Math.round(m.carbsSimple || 0)})`
+            : (Math.round(m.carbs || 0) || '–');
+          const fatCell = (m.fatSaturated != null || m.fatUnsaturated != null)
+            ? `${Math.round(m.fat || 0) || 0}\n(${Math.round(m.fatSaturated || 0)}/${Math.round(m.fatUnsaturated || 0)})`
+            : (Math.round(m.fat || 0) || '–');
+          const fruitVegCell = (m.fruitG || m.vegetableG) ? `${Math.round(m.fruitG || 0)}/${Math.round(m.vegetableG || 0)}` : '–';
           detailRows.push([
             m.time || '–',
             name,
             Math.round(m.kcal    || 0) || '–',
             Math.round(m.protein || 0) || '–',
-            Math.round(m.carbs   || 0) || '–',
-            Math.round(m.fat     || 0) || '–',
+            carbsCell,
+            fatCell,
             Math.round(m.fiber   || 0) || '–',
+            m.caffeine ? Math.round(m.caffeine) : '–',
+            fruitVegCell,
             m.healthScore != null ? `${m.healthScore}/6` : '–',
           ]);
         });
@@ -673,19 +690,21 @@ const KalorienTracker = () => {
 
         autoTable(docL, {
           startY: 19,
-          head: [['Zeit', 'Mahlzeit & Bestandteile', 'kcal', 'Protein\n(g)', 'Carbs\n(g)', 'Fett\n(g)', 'Faser\n(g)', 'Health\nScore']],
+          head: [['Zeit', 'Mahlzeit & Bestandteile', 'kcal', 'Protein\n(g)', 'Carbs g\n(komplex/einfach)', 'Fett g\n(ges./unges.)', 'Faser\n(g)', 'Koffein\n(mg)', 'Obst/Gem.\n(g)', 'Health\nScore']],
           body: detailRows,
-          styles:      { fontSize: 7, cellPadding: 1.8, valign: 'top' },
-          headStyles:  { fillColor: [20, 184, 166], textColor: 255, fontStyle: 'bold', halign: 'center' },
+          styles:      { fontSize: 6.5, cellPadding: 1.6, valign: 'top' },
+          headStyles:  { fillColor: [20, 184, 166], textColor: 255, fontStyle: 'bold', halign: 'center', fontSize: 7 },
           columnStyles: {
-            0: { cellWidth: 14 },
-            1: { cellWidth: 150 },
-            2: { cellWidth: 14, halign: 'right' },
-            3: { cellWidth: 16, halign: 'right' },
-            4: { cellWidth: 14, halign: 'right' },
-            5: { cellWidth: 14, halign: 'right' },
-            6: { cellWidth: 14, halign: 'right' },
-            7: { cellWidth: 15, halign: 'center' },
+            0: { cellWidth: 12 },
+            1: { cellWidth: 108 },
+            2: { cellWidth: 12, halign: 'right' },
+            3: { cellWidth: 13, halign: 'right' },
+            4: { cellWidth: 18, halign: 'right' },
+            5: { cellWidth: 18, halign: 'right' },
+            6: { cellWidth: 10, halign: 'right' },
+            7: { cellWidth: 12, halign: 'right' },
+            8: { cellWidth: 14, halign: 'right' },
+            9: { cellWidth: 12, halign: 'center' },
           },
           alternateRowStyles: { fillColor: [248, 250, 252] },
         });
@@ -3325,7 +3344,7 @@ ${trainingDays.filter(d => {
                         />
                         <span>
                           <span className="block text-xs font-semibold text-slate-700">Alle Mahlzeiten im Detail</span>
-                          <span className="block text-[10px] text-slate-400 leading-tight">Anhang mit jeder Mahlzeit inkl. Bestandteilen, Makros & Health Score</span>
+                          <span className="block text-[10px] text-slate-400 leading-tight">Anhang mit jeder Mahlzeit inkl. Bestandteilen, Koffein, gesättigten/ungesättigten Fetten, Carb-Split, Obst/Gemüse, Tagesverteilung & Health Score</span>
                         </span>
                       </label>
 
