@@ -1474,6 +1474,9 @@ const KalorienTracker = () => {
       d.setDate(d.getDate() - i);
       const dateKey    = toDateKey(d);
       const dayMeals   = Array.isArray(freshHistory[dateKey]) ? freshHistory[dateKey] : [];
+      // Bewusst ausgeschlossene Tage (siehe toggleExcludeDay) nie mit einem
+      // Tagesziel-Platzhalter überschreiben.
+      if (dayMeals.some(m => m.isExcluded)) continue;
       const realKcal   = dayMeals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0);
       const hasCorr    = dayMeals.some(m => m.isAutoCorrection);
 
@@ -1537,6 +1540,31 @@ const KalorienTracker = () => {
     const newHistory = { ...history };
     delete newHistory[selectedDate];
     saveHistory(newHistory);
+  };
+
+  // ── Tag aus Statistik ausschließen ──────────────────────────────────────────
+  // Für Tage, die bewusst nicht erfasst wurden (z.B. Urlaub) und daher NICHT mit
+  // dem Tagesziel als Schätzwert in die Durchschnitte einfließen sollen (anders
+  // als "vergessene" Tage, die per Auto-Backfill das Tagesziel als Platzhalter
+  // bekommen). Ersetzt alle echten Mahlzeiten des Tages durch einen einzelnen
+  // Marker – ein Tag ist entweder erfasst oder ausgeschlossen, nicht beides.
+  const isDayExcluded = (meals) => Array.isArray(meals) && meals.some(m => m.isExcluded);
+  const toggleExcludeDay = () => {
+    if (isDayExcluded(currentMeals)) {
+      saveHistory({ ...history, [selectedDate]: currentMeals.filter(m => !m.isExcluded) });
+      return;
+    }
+    if (currentMeals.length > 0 && !window.confirm('Alle Mahlzeiten dieses Tages werden entfernt und der Tag aus den Statistiken ausgeschlossen. Fortfahren?')) return;
+    saveHistory({
+      ...history,
+      [selectedDate]: [{
+        id: `excluded-${selectedDate}`,
+        name: 'Nicht erfasst (ausgeschlossen)',
+        kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0,
+        isExcluded: true,
+        excludedAt: new Date().toISOString(),
+      }],
+    });
   };
 
   // ── AI submit ────────────────────────────────────────────────────────────────
@@ -1920,7 +1948,11 @@ const KalorienTracker = () => {
     // Erhaltungskalorien-Basis (ohne Sport) für die Defizit-Anzeige
     const tdeeNoSport = rules.maintenanceBase;
 
-    const tracked = days;
+    // Bewusst ausgeschlossene Tage (z.B. Urlaub, siehe toggleExcludeDay) fließen
+    // NICHT in Summen/Durchschnitte ein – anders als "vergessene" Tage, die als
+    // Schätzung das Tagesziel bekommen. Sie zählen auch nicht zum Nenner (n).
+    const tracked = days.filter(d => !isDayExcluded(history[d] || []));
+    const excludedDays = days.length - tracked.length;
     if (tracked.length === 0) return null;
 
     const sums = tracked.reduce((acc, d) => {
@@ -1954,6 +1986,7 @@ const KalorienTracker = () => {
 
     const dayData = days.map(d => {
       const meals        = history[d] || [];
+      const excluded     = isDayExcluded(meals);
       const training     = trainingDays.find(t => t.date === d);
       const dayGoal      = dailyGoalFor(training, restBase);
       const kcalLogged   = Math.round(meals.reduce((a, m) => a + (m.kcal || 0), 0));
@@ -1961,18 +1994,19 @@ const KalorienTracker = () => {
       const hasCorrEntry = meals.some(m => m.isAutoCorrection);
       const realKcal     = hasCorrEntry ? Math.round(meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0)) : kcalLogged;
       const useGoal      = !isToday_ && !hasCorrEntry && realKcal < 1500;
-      const kcalDisplay  = useGoal ? dayGoal : kcalLogged;
+      const kcalDisplay  = excluded ? null : (useGoal ? dayGoal : kcalLogged);
       const sportKcal    = training?.totalCalories || 0;
-      const net          = Math.round(kcalDisplay - sportKcal);
+      const net          = excluded ? null : Math.round(kcalDisplay - sportKcal);
       // Erhaltungskalorien = tdeeNoSport (maintenanceBase) + sportKcal = tdeeNoSport - net (äquivalent umgestellt)
       const erhaltung    = tdeeNoSport + sportKcal;
-      const deficit      = Math.round(tdeeNoSport - net);
+      const deficit      = excluded ? null : Math.round(tdeeNoSport - net);
       const plannedDeficit = Math.round(erhaltung - dayGoal);
       return {
         date:        d,
+        excluded,
         kcal:        kcalLogged,
         kcalDisplay,
-        untracked:   hasCorrEntry || useGoal,
+        untracked:   !excluded && (hasCorrEntry || useGoal),
         protein: Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.protein || 0), 0)),
         carbs:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.carbs   || 0), 0)),
         fat:     Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fat     || 0), 0)),
@@ -1996,15 +2030,17 @@ const KalorienTracker = () => {
       };
     });
 
-    const maxKcal = Math.max(...dayData.map(d => Math.max(d.kcalDisplay || d.kcal, d.goal)), 1);
+    const maxKcal = Math.max(...dayData.filter(d => !d.excluded).map(d => Math.max(d.kcalDisplay || d.kcal, d.goal)), 1);
     // Heute ist noch nicht abgeschlossen (Essen/Sport ggf. noch nicht vollständig erfasst) →
     // aus Netto-/Defizit-Berechnungen ausschließen, sonst verzerrt der unvollständige Tag den Schnitt.
-    const netDays      = dayData.filter(d => d.date !== todayKey);
-    const deficitDays  = dayData.filter(d => d.deficit !== null && d.date !== todayKey);
+    // Ausgeschlossene Tage (excluded) fließen ebenfalls nicht ein.
+    const statDays     = dayData.filter(d => !d.excluded);
+    const netDays      = statDays.filter(d => d.date !== todayKey);
+    const deficitDays  = statDays.filter(d => d.deficit !== null && d.date !== todayKey);
     const deficitSum   = deficitDays.length ? Math.round(deficitDays.reduce((s, d) => s + d.deficit, 0)) : null;
     // Geplantes Defizit basiert auf dem Tagesziel (nicht der tatsächlichen Aufnahme) und ist
     // daher auch für den laufenden Tag gültig – kein Ausschluss von "heute" nötig.
-    const plannedDeficitSum = Math.round(dayData.reduce((s, d) => s + d.plannedDeficit, 0));
+    const plannedDeficitSum = statDays.length ? Math.round(statDays.reduce((s, d) => s + d.plannedDeficit, 0)) : 0;
 
     return {
       avg: {
@@ -2016,11 +2052,12 @@ const KalorienTracker = () => {
         sport: Math.round(sums.sport / n),
         net: netDays.length ? Math.round(netDays.reduce((s, d) => s + d.net, 0) / netDays.length) : null,
         deficit: deficitDays.length ? Math.round(deficitSum / deficitDays.length) : null,
-        erhaltung: Math.round(dayData.reduce((s, d) => s + d.erhaltung, 0) / dayData.length),
-        plannedDeficit: Math.round(plannedDeficitSum / dayData.length),
+        erhaltung: statDays.length ? Math.round(statDays.reduce((s, d) => s + d.erhaltung, 0) / statDays.length) : 0,
+        plannedDeficit: statDays.length ? Math.round(plannedDeficitSum / statDays.length) : 0,
       },
       trackedDays: n,
       totalDays: days.length,
+      excludedDays,
       avgWater: waterDays.length > 0 ? (waterSum / waterDays.length).toFixed(1) : '0.0',
       dayData,
       maxKcal,
@@ -3065,13 +3102,36 @@ ${trainingDays.filter(d => {
 
             {/* ── Meals list ── */}
             <div className="glass rounded-3xl p-6 mb-4 shadow-xl min-h-[180px] max-h-[500px] overflow-y-auto">
-              <h3 className="text-xl font-bold text-slate-800 mb-4">
-                Mahlzeiten{currentMeals.length > 0 && (
-                  <span className="text-slate-400 text-base font-normal ml-2">({currentMeals.length})</span>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-slate-800">
+                  Mahlzeiten{currentMeals.length > 0 && !isDayExcluded(currentMeals) && (
+                    <span className="text-slate-400 text-base font-normal ml-2">({currentMeals.length})</span>
+                  )}
+                </h3>
+                {!isToday && (
+                  <button
+                    onClick={toggleExcludeDay}
+                    className={`text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors ${
+                      isDayExcluded(currentMeals)
+                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                    }`}
+                    title="Tag bewusst nicht erfasst (z.B. Urlaub) – aus Ø-Statistiken ausschließen, statt mit dem Tagesziel zu schätzen"
+                  >
+                    {isDayExcluded(currentMeals) ? '↩ Markierung aufheben' : 'Als nicht erfasst markieren'}
+                  </button>
                 )}
-              </h3>
+              </div>
 
-              {currentMeals.length === 0 ? (
+              {isDayExcluded(currentMeals) ? (
+                <div className="text-center py-10">
+                  <div className="w-16 h-16 rounded-full bg-amber-100 mx-auto mb-3 flex items-center justify-center">
+                    <X className="w-8 h-8 text-amber-500" />
+                  </div>
+                  <p className="text-slate-500">Als nicht erfasst markiert</p>
+                  <p className="text-slate-400 text-sm mt-1">Fließt nicht in Durchschnitte/Statistiken ein</p>
+                </div>
+              ) : currentMeals.length === 0 ? (
                 <div className="text-center py-10">
                   <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-100 to-teal-100 mx-auto mb-3 flex items-center justify-center">
                     <Plus className="w-8 h-8 text-emerald-600" />
@@ -3409,6 +3469,7 @@ ${trainingDays.filter(d => {
                       <h3 className="text-lg font-bold text-slate-800">Ø Durchschnitt pro Tag</h3>
                       <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
                         {stats.trackedDays} / {stats.totalDays} Tage
+                        {stats.excludedDays > 0 && ` (${stats.excludedDays} ausgeschlossen)`}
                       </span>
                     </div>
 
@@ -3564,6 +3625,8 @@ ${trainingDays.filter(d => {
                                     ? `Nicht erfasst · geschätzt ${displayKcal} kcal (+10%)${day.sport > 0 ? ` · Sport: ${day.sport} kcal` : ''}`
                                     : `${day.kcal} kcal (Ziel: ${day.goal} kcal)${day.sport > 0 ? ` · Sport: ${day.sport} kcal` : ''}`}
                                 />
+                              ) : day.excluded ? (
+                                <div className="w-full h-4 rounded-t-md flex items-center justify-center bg-[repeating-linear-gradient(45deg,#fde68a,#fde68a_3px,#fef3c7_3px,#fef3c7_6px)]" title="Nicht erfasst (ausgeschlossen) – zählt nicht in die Statistik" />
                               ) : (
                                 <div className="w-full h-1 bg-slate-200 rounded-full" />
                               )}
@@ -3596,6 +3659,12 @@ ${trainingDays.filter(d => {
                         <div className="w-3 h-3 rounded-sm bg-red-400" />
                         <span className="text-xs text-slate-400">Über Ziel</span>
                       </div>
+                      {stats.excludedDays > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-3 h-3 rounded-sm bg-[repeating-linear-gradient(45deg,#fde68a,#fde68a_2px,#fef3c7_2px,#fef3c7_4px)]" />
+                          <span className="text-xs text-slate-400">Nicht erfasst (ausgeschlossen)</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
