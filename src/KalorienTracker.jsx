@@ -219,6 +219,7 @@ const KalorienTracker = () => {
   const [monthOffset, setMonthOffset] = useState(0); // 0 = aktueller Monat, -1 = Vormonat, ...
   const [weekOffset, setWeekOffset] = useState(0); // 0 = aktuelle 7-Tage-Periode, -1 = vorherige, ...
   const [input, setInput] = useState('');
+  const [manualMealTime, setManualMealTime] = useState('12:00'); // Uhrzeit beim Nacherfassen vergangener Tage
   const [pendingFoodAnalysis, setPendingFoodAnalysis] = useState(null); // KI-Schätzung wartet auf Freigabe
   const [loadingFoodPhoto, setLoadingFoodPhoto] = useState(false);
   const foodPhotoRef = useRef(null);
@@ -1583,10 +1584,12 @@ const KalorienTracker = () => {
       const nutrition = await res.json();
       const newMeal = {
         id: Date.now(),
-        time: new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+        time: isToday ? new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : manualMealTime,
         ...nutrition,
       };
-      saveHistory({ ...history, [selectedDate]: [...currentMeals, newMeal] });
+      // Eine echte Mahlzeit hebt eine evtl. vorhandene "nicht erfasst"-Markierung auf –
+      // der Tag ist ja jetzt (teilweise) erfasst.
+      saveHistory({ ...history, [selectedDate]: [...currentMeals.filter(m => !m.isExcluded), newMeal] });
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
     } catch (err) {
@@ -1628,10 +1631,11 @@ const KalorienTracker = () => {
     const { photo, assumptions, ...nutrition } = pendingFoodAnalysis; // Foto/Annahmen nicht persistieren
     const newMeal = {
       id: Date.now(),
-      time: new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+      time: isToday ? new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : manualMealTime,
       ...nutrition,
     };
-    saveHistory({ ...history, [selectedDate]: [...currentMeals, newMeal] });
+    // Eine echte Mahlzeit hebt eine evtl. vorhandene "nicht erfasst"-Markierung auf.
+    saveHistory({ ...history, [selectedDate]: [...currentMeals.filter(m => !m.isExcluded), newMeal] });
     setPendingFoodAnalysis(null);
     setInput('');
     setSavedFlash(true);
@@ -3137,7 +3141,7 @@ ${trainingDays.filter(d => {
                     <Plus className="w-8 h-8 text-emerald-600" />
                   </div>
                   <p className="text-slate-500">Keine Mahlzeiten erfasst</p>
-                  {isToday && <p className="text-slate-400 text-sm mt-1">Gib unten ein Lebensmittel ein</p>}
+                  <p className="text-slate-400 text-sm mt-1">Gib unten ein Lebensmittel ein</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -3271,69 +3275,77 @@ ${trainingDays.filter(d => {
               )}
             </div>
 
-            {/* Input – only for today */}
-            {isToday ? (
-              <div className="glass rounded-3xl p-4 shadow-xl">
-                <div className="flex gap-3">
+            {/* Input – auch für vergangene Tage, damit vergessene/falsche Einträge
+                nachträglich korrigiert bzw. ergänzt werden können. */}
+            <div className="glass rounded-3xl p-4 shadow-xl">
+              {!isToday && (
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs text-slate-500 flex-shrink-0">Uhrzeit der Mahlzeit (rückwirkend)</span>
                   <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder="z.B. 2 Äpfel, 100g Haferflocken mit Milch, Chicken Burger..."
-                    disabled={loading}
-                    className="flex-1 px-5 py-4 rounded-2xl border-2 border-slate-200 focus:border-emerald-500 focus:outline-none input-glow disabled:opacity-50 text-slate-700 placeholder-slate-400"
+                    type="time"
+                    value={manualMealTime}
+                    onChange={(e) => setManualMealTime(e.target.value)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none"
                   />
-                  {/* Foto-Analyse: Kamera/Galerie → KI-Schätzung → Freigabe-Dialog */}
-                  <input
-                    ref={foodPhotoRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={(e) => { analyzeFoodPhoto(e.target.files?.[0]); e.target.value = ''; }}
-                  />
-                  <button
-                    onClick={() => foodPhotoRef.current?.click()}
-                    disabled={loading || loadingFoodPhoto}
-                    title="Foto vom Essen aufnehmen – KI schätzt die Nährwerte"
-                    className="px-4 py-4 rounded-2xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-semibold disabled:opacity-50 transition-all shadow-lg flex items-center"
-                  >
-                    {loadingFoodPhoto
-                      ? <Loader2 className="w-5 h-5 animate-spin" />
-                      : <Camera className="w-5 h-5" />
-                    }
-                  </button>
-                  <button
-                    onClick={handleSubmit}
-                    disabled={loading || !input.trim()}
-                    className="px-6 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold disabled:opacity-50 transition-all shadow-lg flex items-center gap-2"
-                  >
-                    {loading
-                      ? <><Loader2 className="w-5 h-5 animate-spin" />Analysiere...</>
-                      : <><Send className="w-5 h-5" />Hinzufügen</>
-                    }
-                  </button>
                 </div>
-                {loadingFoodPhoto && (
-                  <p className="text-xs text-violet-500 font-medium mt-2 text-center animate-pulse">
-                    📷 KI analysiert dein Foto…
-                  </p>
-                )}
-                {savedFlash && (
-                  <p className="text-xs text-emerald-600 font-medium mt-2 text-center animate-pulse">
-                    ✓ Gespeichert
-                  </p>
-                )}
-                <p className="text-xs text-slate-500 mt-2 text-center">
-                  KI-gestützte Analyse · Komplett kostenlos mit Google Gemini
-                </p>
+              )}
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder="z.B. 2 Äpfel, 100g Haferflocken mit Milch, Chicken Burger..."
+                  disabled={loading}
+                  className="flex-1 px-5 py-4 rounded-2xl border-2 border-slate-200 focus:border-emerald-500 focus:outline-none input-glow disabled:opacity-50 text-slate-700 placeholder-slate-400"
+                />
+                {/* Foto-Analyse: Kamera/Galerie → KI-Schätzung → Freigabe-Dialog */}
+                <input
+                  ref={foodPhotoRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => { analyzeFoodPhoto(e.target.files?.[0]); e.target.value = ''; }}
+                />
+                <button
+                  onClick={() => foodPhotoRef.current?.click()}
+                  disabled={loading || loadingFoodPhoto}
+                  title="Foto vom Essen aufnehmen – KI schätzt die Nährwerte"
+                  className="px-4 py-4 rounded-2xl bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-semibold disabled:opacity-50 transition-all shadow-lg flex items-center"
+                >
+                  {loadingFoodPhoto
+                    ? <Loader2 className="w-5 h-5 animate-spin" />
+                    : <Camera className="w-5 h-5" />
+                  }
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={loading || !input.trim()}
+                  className="px-6 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold disabled:opacity-50 transition-all shadow-lg flex items-center gap-2"
+                >
+                  {loading
+                    ? <><Loader2 className="w-5 h-5 animate-spin" />Analysiere...</>
+                    : <><Send className="w-5 h-5" />Hinzufügen</>
+                  }
+                </button>
               </div>
-            ) : (
-              <p className="text-center text-slate-400 text-sm py-2">
-                Vergangene Tage sind schreibgeschützt
+              {loadingFoodPhoto && (
+                <p className="text-xs text-violet-500 font-medium mt-2 text-center animate-pulse">
+                  📷 KI analysiert dein Foto…
+                </p>
+              )}
+              {savedFlash && (
+                <p className="text-xs text-emerald-600 font-medium mt-2 text-center animate-pulse">
+                  ✓ Gespeichert
+                </p>
+              )}
+              <p className="text-xs text-slate-500 mt-2 text-center">
+                {isToday
+                  ? 'KI-gestützte Analyse · Komplett kostenlos mit Google Gemini'
+                  : 'Nacherfassung für vergangenen Tag – wird mit der oben gewählten Uhrzeit gespeichert'}
               </p>
-            )}
+            </div>
           </>
         )}
 
