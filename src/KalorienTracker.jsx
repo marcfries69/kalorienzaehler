@@ -14,6 +14,17 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = 'https://fwsunbqvkvudmgjkjsbh.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3c3VuYnF2a3Z1ZG1namtqc2JoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1ODY0OTEsImV4cCI6MjA4NzE2MjQ5MX0.5bZOef0bZL4U4eAwthM3JZas_AsjDWgsJwKWjO-RB3I';
 const NUTRITION_USER_ID = 'cff2bc0d-5205-4a90-8df9-463afe2065d8';
+
+// Störfaktor-Marker — identisch zu MARKER_TYPES in der Blood-Analytics-App
+// (src/components/NutritionSleepView.jsx). Beide Apps schreiben in dieselbe
+// Tabelle `sick_days` (Spalte `type`, Migration 026). Neue Typen müssen in
+// BEIDEN Apps, in MARKER_LABELS im Backend und im CHECK-Constraint stehen.
+const MARKER_TYPES = [
+  { type: 'sick',   label: 'Krank',        icon: '\u{1F912}',
+    chipActive: 'bg-amber-100 border-amber-300 text-amber-700' },
+  { type: 'stress', label: 'Hoher Stress', icon: '\u{1F525}',
+    chipActive: 'bg-rose-100 border-rose-300 text-rose-700' },
+];
 const sbClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const toDateKey = (d) => {
@@ -288,10 +299,11 @@ const KalorienTracker = () => {
   const [sleepQuick, setSleepQuick] = useState(null);
   const [loadingSleepQuick, setLoadingSleepQuick] = useState(false);
   const [sleepQuickError, setSleepQuickError] = useState(null);
-  const [sickDates, setSickDates] = useState([]);
-  const [sickNotes, setSickNotes] = useState({});
+  const [dayMarkers, setDayMarkers] = useState([]);   // [{date, type, note}]
   const [sickDraftDate, setSickDraftDate] = useState(() => toDateKey(new Date()));
   const [sickDraftNote, setSickDraftNote] = useState('');
+  const [sickDraftType, setSickDraftType] = useState('sick');
+  const [markerBusy, setMarkerBusy] = useState(null);
   const [savingSick, setSavingSick] = useState(false);
   const [deepStatus, setDeepStatus] = useState(null); // null | 'running' | 'done' | 'error'
   const [deepResult, setDeepResult] = useState(null);
@@ -1400,6 +1412,17 @@ const KalorienTracker = () => {
   const currentWater = waterHistory[selectedDate] || 0;
   const isToday = selectedDate === todayKey;
 
+  // Zeitstempel-Vorbelegung beim Tageswechsel: heute = aktuelle Uhrzeit (Nutzer trägt oft
+  // erst später ein, als er gegessen hat, und kann den Wert vor dem Speichern anpassen),
+  // an vergangenen Tagen neutral 12:00 als Ausgangspunkt für die Nacherfassung.
+  useEffect(() => {
+    setManualMealTime(
+      selectedDate === todayKey
+        ? new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+        : '12:00'
+    );
+  }, [selectedDate]);
+
   const totals = currentMeals.reduce((acc, meal) => {
     const mn = meal.micronutrients || {};
     return {
@@ -1584,7 +1607,7 @@ const KalorienTracker = () => {
       const nutrition = await res.json();
       const newMeal = {
         id: Date.now(),
-        time: isToday ? new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : manualMealTime,
+        time: manualMealTime,
         ...nutrition,
       };
       // Eine echte Mahlzeit hebt eine evtl. vorhandene "nicht erfasst"-Markierung auf –
@@ -1631,7 +1654,7 @@ const KalorienTracker = () => {
     const { photo, assumptions, ...nutrition } = pendingFoodAnalysis; // Foto/Annahmen nicht persistieren
     const newMeal = {
       id: Date.now(),
-      time: isToday ? new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : manualMealTime,
+      time: manualMealTime,
       ...nutrition,
     };
     // Eine echte Mahlzeit hebt eine evtl. vorhandene "nicht erfasst"-Markierung auf.
@@ -2074,10 +2097,35 @@ const KalorienTracker = () => {
 
   // ── Ernährung × Schlaf/Recovery ──────────────────────────────────────────────
   const loadSickDays = async () => {
-    const { data } = await sbClient.from('sick_days').select('date, note').order('date', { ascending: false });
-    setSickDates((data || []).map(r => r.date));
-    setSickNotes(Object.fromEntries((data || []).map(r => [r.date, r.note])));
-    return (data || []).map(r => r.date);
+    // `type` existiert erst ab Migration 026 — fehlt sie, ohne die Spalte
+    // laden und alles als 'sick' werten, damit die App vorher weiterläuft.
+    let { data, error } = await sbClient.from('sick_days')
+      .select('date, note, type').order('date', { ascending: false });
+    if (error) {
+      const fb = await sbClient.from('sick_days').select('date, note').order('date', { ascending: false });
+      data = (fb.data || []).map(r => ({ ...r, type: 'sick' }));
+    }
+    const markers = (data || []).map(r => ({ date: r.date, type: r.type || 'sick', note: r.note }));
+    setDayMarkers(markers);
+    return markers;
+  };
+
+  // Marker für einen Tag an-/abschalten — für die Chips in der Tagesansicht.
+  const toggleDayMarker = async (date, type) => {
+    const exists = dayMarkers.some(m => m.date === date && m.type === type);
+    setMarkerBusy(`${date}-${type}`);
+    try {
+      if (exists) {
+        await sbClient.from('sick_days').delete()
+          .eq('user_id', NUTRITION_USER_ID).eq('date', date).eq('type', type);
+      } else {
+        await sbClient.from('sick_days').upsert(
+          { user_id: NUTRITION_USER_ID, date, type, note: null },
+          { onConflict: 'user_id,date,type' }
+        );
+      }
+      await loadSickDays();
+    } finally { setMarkerBusy(null); }
   };
 
   const runSleepQuick = async () => {
@@ -2095,8 +2143,8 @@ const KalorienTracker = () => {
     setSavingSick(true);
     try {
       await sbClient.from('sick_days').upsert(
-        { user_id: NUTRITION_USER_ID, date: sickDraftDate, note: sickDraftNote || null },
-        { onConflict: 'user_id,date' }
+        { user_id: NUTRITION_USER_ID, date: sickDraftDate, type: sickDraftType, note: sickDraftNote || null },
+        { onConflict: 'user_id,date,type' }
       );
       setSickDraftNote('');
       await loadSickDays();
@@ -2104,8 +2152,9 @@ const KalorienTracker = () => {
     } finally { setSavingSick(false); }
   };
 
-  const removeSickDay = async (date) => {
-    await sbClient.from('sick_days').delete().eq('user_id', NUTRITION_USER_ID).eq('date', date);
+  const removeSickDay = async (date, type = 'sick') => {
+    await sbClient.from('sick_days').delete()
+      .eq('user_id', NUTRITION_USER_ID).eq('date', date).eq('type', type);
     await loadSickDays();
     runSleepQuick();
   };
@@ -2479,6 +2528,31 @@ ${trainingDays.filter(d => {
               >
                 <ChevronRight className="w-5 h-5" />
               </button>
+            </div>
+
+            {/* ── Störfaktor-Marker für diesen Tag ──
+                Markierte Tage fliegen aus den Ernährung×Schlaf-Korrelationen
+                raus, damit ihre Wirkung nicht der Ernährung zugerechnet wird. */}
+            <div className="flex items-center justify-center gap-2 mb-4">
+              {MARKER_TYPES.map(t => {
+                const active = dayMarkers.some(m => m.date === selectedDate && m.type === t.type);
+                const busy = markerBusy === `${selectedDate}-${t.type}`;
+                return (
+                  <button
+                    key={t.type}
+                    onClick={() => toggleDayMarker(selectedDate, t.type)}
+                    disabled={busy}
+                    title={active ? 'Marker entfernen — Tag zählt wieder in den Auswertungen' : 'Tag markieren — wird aus den Ernährung×Schlaf-Auswertungen ausgeschlossen'}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all disabled:opacity-50 ${
+                      active ? t.chipActive : 'bg-white/60 border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+                    }`}
+                  >
+                    <span>{t.icon}</span>
+                    {t.label}
+                    {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+                  </button>
+                );
+              })}
             </div>
 
             {/* ── Preset buttons ── */}
@@ -3276,19 +3350,21 @@ ${trainingDays.filter(d => {
             </div>
 
             {/* Input – auch für vergangene Tage, damit vergessene/falsche Einträge
-                nachträglich korrigiert bzw. ergänzt werden können. */}
+                nachträglich korrigiert bzw. ergänzt werden können. Uhrzeit ist immer
+                anpassbar, da Mahlzeiten oft erst später eingetragen werden, als
+                tatsächlich gegessen wurde (wichtig für Abend-Makro-/Koffein-Auswertung). */}
             <div className="glass rounded-3xl p-4 shadow-xl">
-              {!isToday && (
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-xs text-slate-500 flex-shrink-0">Uhrzeit der Mahlzeit (rückwirkend)</span>
-                  <input
-                    type="time"
-                    value={manualMealTime}
-                    onChange={(e) => setManualMealTime(e.target.value)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none"
-                  />
-                </div>
-              )}
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs text-slate-500 flex-shrink-0">
+                  Uhrzeit der Mahlzeit{!isToday ? ' (rückwirkend)' : ''}
+                </span>
+                <input
+                  type="time"
+                  value={manualMealTime}
+                  onChange={(e) => setManualMealTime(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
               <div className="flex gap-3">
                 <input
                   type="text"
@@ -5234,31 +5310,44 @@ ${trainingDays.filter(d => {
           <div className="glass rounded-3xl p-5 shadow-xl">
             <div className="flex items-center gap-2 mb-3">
               <Thermometer className="w-4 h-4 text-amber-500" />
-              <h3 className="text-sm font-bold text-slate-700">Krankheitstage</h3>
-              <span className="text-xs text-slate-400">— werden aus allen Korrelationen ausgeschlossen</span>
+              <h3 className="text-sm font-bold text-slate-700">Störfaktoren</h3>
+              <span className="text-xs text-slate-400">— markierte Tage werden aus allen Korrelationen ausgeschlossen (auch direkt in der Tagesansicht setzbar)</span>
             </div>
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <input type="date" value={sickDraftDate} onChange={e => setSickDraftDate(e.target.value)}
                 className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700" />
+              <select value={sickDraftType} onChange={e => setSickDraftType(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700">
+                {MARKER_TYPES.map(t => <option key={t.type} value={t.type}>{t.label}</option>)}
+              </select>
               <input type="text" placeholder="Notiz (optional)" value={sickDraftNote} onChange={e => setSickDraftNote(e.target.value)}
                 className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-700 flex-1 min-w-[140px]" />
               <button onClick={addSickDay} disabled={savingSick}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
                 {savingSick ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                Als krank markieren
+                Marker setzen
               </button>
             </div>
-            {sickDates.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {sickDates.map(d => (
-                  <span key={d} className="inline-flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 text-xs px-2.5 py-1 rounded-full">
-                    {new Date(d + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}{sickNotes[d] ? ` · ${sickNotes[d]}` : ''}
-                    <button onClick={() => removeSickDay(d)} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
-                  </span>
-                ))}
+            {dayMarkers.length > 0 ? (
+              <div className="space-y-2">
+                {MARKER_TYPES.map(t => {
+                  const rows = dayMarkers.filter(m => m.type === t.type);
+                  if (rows.length === 0) return null;
+                  return (
+                    <div key={t.type} className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wide text-slate-400 w-24 shrink-0">{t.icon} {t.label}</span>
+                      {rows.map(m => (
+                        <span key={`${m.type}-${m.date}`} className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${t.chipActive}`}>
+                          {new Date(m.date + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}{m.note ? ` · ${m.note}` : ''}
+                          <button onClick={() => removeSickDay(m.date, m.type)} className="hover:text-slate-900"><X className="w-3 h-3" /></button>
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
-              <p className="text-xs text-slate-400">Keine Krankheitstage erfasst.</p>
+              <p className="text-xs text-slate-400">Keine Störfaktoren erfasst.</p>
             )}
           </div>
 
