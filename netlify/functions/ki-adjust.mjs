@@ -39,7 +39,7 @@ export default async (req) => {
     const macroRest  = rules.macroRest  ?? { protein: 150, carbs: 150, fat: 66 };
     const macroTrain = rules.macroTrain ?? { protein: 150, carbs: 200, fat: 85 };
     const macroCycle = rules.macroCycle ?? { protein: 150, carbs: 300, fat: 85 };
-    const fiberGoal  = rules.fiberGoal  ?? 35;
+    const fiberGoal  = rules.fiberGoal  ?? 40;
 
     // ── 1. Body trend ────────────────────────────────────────────────────────
     const sorted  = [...bodyMeasurements].sort((a, b) => a.date.localeCompare(b.date));

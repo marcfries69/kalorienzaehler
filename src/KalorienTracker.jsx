@@ -145,7 +145,7 @@ const DEFAULT_RULES = {
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
   macroCycle: { protein: 150, carbs: 300, fat: 85 }, // Zone2 ≥90min / VO2max-Rad
-  fiberGoal: 35,
+  fiberGoal: 40,
   // AHA-Richtwert zur LDL-Senkung (strenger als die allgemeine WHO/DGE-Empfehlung von 10%
   // der Kalorien) – gesättigte Fettsäuren sollen unter diesem Anteil der Tageskalorien bleiben.
   satFatMaxPct: 7,
@@ -155,12 +155,13 @@ const DEFAULT_RULES = {
   carbIntense:   80, // g/h, sehr intensiv (Z4/Z5/Z6) von Beginn an
 };
 
-// Erzwungene Migration auf die neue Erhaltungs-/Defizit-Basis (2100/1900/200), unabhängig
-// vom vorherigen Wert. Ein Abgleich gegen die alten Defaults reicht NICHT – wer die Regeln
-// vorher schon einmal manuell angepasst hatte, wird von einem exakten Default-Vergleich nie
-// erfasst und bleibt sonst dauerhaft auf falschen Werten stehen. Über eine Versionsnummer
-// läuft das genau EINMAL pro Gerät; danach sind erneute manuelle Anpassungen wieder verbindlich.
-const RULES_MIGRATION_VERSION = 5;
+// Erzwungene Migration auf die neue Erhaltungs-/Defizit-Basis (2100/1900/200) und das
+// Ballaststoff-Ziel (40g), unabhängig vom vorherigen Wert. Ein Abgleich gegen die alten
+// Defaults reicht NICHT – wer die Regeln vorher schon einmal manuell angepasst hatte, wird
+// von einem exakten Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen
+// Werten stehen. Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind
+// erneute manuelle Anpassungen wieder verbindlich.
+const RULES_MIGRATION_VERSION = 6;
 
 const loadRules = () => {
   try {
@@ -171,6 +172,7 @@ const loadRules = () => {
       saved.kcalMinDaily     = DEFAULT_RULES.kcalMinDaily;
       saved.kcalRestBase     = DEFAULT_RULES.kcalRestBase;
       saved.referenceDeficit = DEFAULT_RULES.referenceDeficit;
+      saved.fiberGoal        = DEFAULT_RULES.fiberGoal;
       saved.__migrationVersion = RULES_MIGRATION_VERSION;
       // calorieGoal wirkt in mehreren Berechnungen als Fallback vor kcalRestBase – ein alter
       // Wert würde die gerade erzwungene Migration sonst wieder überschreiben.
