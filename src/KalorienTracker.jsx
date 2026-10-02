@@ -2827,27 +2827,38 @@ ${trainingDays.filter(d => {
               })()}
 
               {/* Koffein: gesamt sowie vor/nach 13 Uhr — spät konsumiertes Koffein kann den
-                  Schlaf stärker beeinträchtigen, daher separat ausgewiesen. */}
-              {totals.caffeine > 0 && (
-                <div className="mt-4 pt-4 border-t border-slate-100">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <span className="text-sm">☕</span>
-                    <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wide">Koffein</h3>
+                  Schlaf stärker beeinträchtigen, daher separat ausgewiesen. Zusätzlich
+                  mg/kg Körpergewicht (aktuellstes Körpergewicht aus Blood Analytics), da
+                  Einordnung/Richtwerte für Koffein üblicherweise pro kg angegeben werden. */}
+              {totals.caffeine > 0 && (() => {
+                const latestWeight = bodyMeasurements.length > 0 ? bodyMeasurements[bodyMeasurements.length - 1]?.weight : null;
+                const mgPerKg = latestWeight > 0 ? Math.round((totals.caffeine / latestWeight) * 10) / 10 : null;
+                return (
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <span className="text-sm">☕</span>
+                      <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wide">Koffein</h3>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { label: 'Gesamt',   value: Math.round(totals.caffeine) },
+                        { label: 'Vor 13 Uhr', value: Math.round(totals.caffeineBefore13) },
+                        { label: 'Nach 13 Uhr', value: Math.round(totals.caffeineAfter13) },
+                      ].map(s => (
+                        <div key={s.label} className="bg-stone-50 border border-stone-200 rounded-lg px-2 py-1.5 text-center">
+                          <p className="text-[10px] text-stone-400 uppercase tracking-wide">{s.label}</p>
+                          <p className="text-sm font-bold text-stone-700 mono">{s.value}mg</p>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-stone-400 mt-1.5 text-center">
+                      {mgPerKg != null
+                        ? `${mgPerKg} mg/kg Körpergewicht (${latestWeight}kg)`
+                        : 'mg/kg Körpergewicht: kein Körpergewicht hinterlegt'}
+                    </p>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { label: 'Gesamt',   value: Math.round(totals.caffeine) },
-                      { label: 'Vor 13 Uhr', value: Math.round(totals.caffeineBefore13) },
-                      { label: 'Nach 13 Uhr', value: Math.round(totals.caffeineAfter13) },
-                    ].map(s => (
-                      <div key={s.label} className="bg-stone-50 border border-stone-200 rounded-lg px-2 py-1.5 text-center">
-                        <p className="text-[10px] text-stone-400 uppercase tracking-wide">{s.label}</p>
-                        <p className="text-sm font-bold text-stone-700 mono">{s.value}mg</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Obst & Gemüse: getrennt und in Summe, Ampel ab 750g gesamt (grün). */}
               {(totals.fruit > 0 || totals.vegetable > 0) && (() => {
