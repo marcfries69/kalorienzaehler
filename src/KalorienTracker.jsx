@@ -3595,6 +3595,38 @@ ${trainingDays.filter(d => {
                 </div>
               ) : (
                 <>
+                  {/* Gewichtsentwicklung im Zeitraum — erste vs. letzte Körpergewichts-Messung
+                      (aus Blood Analytics) innerhalb des aktuell gewählten Zeitraums. */}
+                  {(() => {
+                    const periodWeights = bodyMeasurements.filter(
+                      m => m.weight != null && m.date >= days[0] && m.date <= days[days.length - 1]
+                    );
+                    if (periodWeights.length === 0) return null;
+                    const first = periodWeights[0];
+                    const last = periodWeights[periodWeights.length - 1];
+                    const delta = Math.round((last.weight - first.weight) * 10) / 10;
+                    const tone = delta < 0 ? 'bg-emerald-100 text-emerald-700' : delta > 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500';
+                    return (
+                      <div className="glass rounded-3xl p-5 mb-4 shadow-xl flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <Scale className="w-4 h-4 text-blue-500" />
+                          <h3 className="text-sm font-bold text-slate-700">Gewichtsentwicklung</h3>
+                          <span className="text-xs text-slate-400">({periodWeights.length} {periodWeights.length === 1 ? 'Messung' : 'Messungen'} im Zeitraum)</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm text-slate-500 mono">
+                            {first.weight}kg{periodWeights.length > 1 ? ` → ${last.weight}kg` : ''}
+                          </span>
+                          {periodWeights.length > 1 && (
+                            <span className={`text-sm font-bold mono px-2.5 py-1 rounded-lg ${tone}`}>
+                              {delta > 0 ? '+' : ''}{delta}kg
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Average stats */}
                   <div className="glass rounded-3xl p-6 mb-4 shadow-xl">
                     <div className="flex items-center justify-between mb-4">
