@@ -4,6 +4,7 @@ import {
   X, Check, ChevronLeft, ChevronRight, Droplets, BarChart2, Calendar, TrendingUp, Target, Settings,
   Brain, Upload, Scale, Dumbbell, RefreshCw, Sparkles, Activity, FileDown, Bike, Zap, Utensils, Wind,
   Cloud, CloudOff, Camera, ImagePlus, Moon, Thermometer, Search, Info, HeartPulse, Stethoscope,
+  CalendarRange,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -231,6 +232,7 @@ const KalorienTracker = () => {
   const [activeTab, setActiveTab] = useState('day');
   const [monthOffset, setMonthOffset] = useState(0); // 0 = aktueller Monat, -1 = Vormonat, ...
   const [weekOffset, setWeekOffset] = useState(0); // 0 = aktuelle 7-Tage-Periode, -1 = vorherige, ...
+  const [quarterOffset, setQuarterOffset] = useState(0); // 0 = letzte 3 Monate, -1 = die 3 Monate davor, ...
   const [input, setInput] = useState('');
   const [manualMealTime, setManualMealTime] = useState('12:00'); // Uhrzeit beim Nacherfassen vergangener Tage
   const [pendingFoodAnalysis, setPendingFoodAnalysis] = useState(null); // KI-Schätzung wartet auf Freigabe
@@ -1969,6 +1971,25 @@ const KalorienTracker = () => {
     );
   };
 
+  // offset: 0 = letzte 3 Kalendermonate (bis heute), -1 = die 3 Monate davor, ...
+  // (new Date() normalisiert Monate außerhalb 0-11 automatisch über Jahresgrenzen hinweg)
+  const getQuarterDays = (offset = 0) => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const endMonth   = now.getMonth() + offset * 3;
+    const startMonth = endMonth - 2;
+    const isCurrentPeriod = offset === 0;
+    const days = [];
+    for (let m = startMonth; m < endMonth; m++) {
+      const daysInMonth = new Date(year, m + 1, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) days.push(toDateKey(new Date(year, m, d)));
+    }
+    const daysInEndMonth = new Date(year, endMonth + 1, 0).getDate();
+    const lastDay = isCurrentPeriod ? now.getDate() : daysInEndMonth;
+    for (let d = 1; d <= lastDay; d++) days.push(toDateKey(new Date(year, endMonth, d)));
+    return days;
+  };
+
   const calcStats = (days) => {
     // Vergessene Tage (< 1500 kcal echte Einträge, außer heute) → Tagesziel als Wert.
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
@@ -2274,8 +2295,10 @@ const KalorienTracker = () => {
 
   const weekDays = getWeekDays(weekOffset);
   const monthDays = getMonthDays(monthOffset);
+  const quarterDays = getQuarterDays(quarterOffset);
   const weekStats = calcStats(weekDays);
   const monthStats = calcStats(monthDays);
+  const quarterStats = calcStats(quarterDays);
 
   // ── Health score label ───────────────────────────────────────────────────────
   const healthLabel = (s) =>
@@ -2472,8 +2495,9 @@ ${trainingDays.filter(d => {
         <div className="glass rounded-2xl p-1.5 mb-5 shadow-md flex gap-1">
           {[
             { key: 'day',   icon: <Calendar  className="w-4 h-4" />, label: 'Tag'   },
-            { key: 'week',  icon: <BarChart2  className="w-4 h-4" />, label: 'Woche' },
-            { key: 'month', icon: <TrendingUp className="w-4 h-4" />, label: 'Monat' },
+            { key: 'week',    icon: <BarChart2    className="w-4 h-4" />, label: 'Woche' },
+            { key: 'month',   icon: <TrendingUp   className="w-4 h-4" />, label: 'Monat' },
+            { key: 'quarter', icon: <CalendarRange className="w-4 h-4" />, label: 'Quartal' },
             { key: 'coach', icon: <Brain      className="w-4 h-4" />, label: 'Coach' },
             { key: 'rad',   icon: <Bike       className="w-4 h-4" />, label: 'Rad'   },
             { key: 'schlaf', icon: <Moon      className="w-4 h-4" />, label: 'Schlaf' },
@@ -3439,20 +3463,26 @@ ${trainingDays.filter(d => {
         )}
 
         {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* WEEK / MONTH VIEW                                                    */}
+        {/* WEEK / MONTH / QUARTER VIEW                                          */}
         {/* ════════════════════════════════════════════════════════════════════ */}
-        {(activeTab === 'week' || activeTab === 'month') && (() => {
+        {(activeTab === 'week' || activeTab === 'month' || activeTab === 'quarter') && (() => {
           const isWeek = activeTab === 'week';
-          const days = isWeek ? weekDays : monthDays;
-          const stats = isWeek ? weekStats : monthStats;
-          const offset    = isWeek ? weekOffset : monthOffset;
-          const setOffset = isWeek ? setWeekOffset : setMonthOffset;
+          const isQuarter = activeTab === 'quarter';
+          const days = isWeek ? weekDays : isQuarter ? quarterDays : monthDays;
+          const stats = isWeek ? weekStats : isQuarter ? quarterStats : monthStats;
+          const offset    = isWeek ? weekOffset : isQuarter ? quarterOffset : monthOffset;
+          const setOffset = isWeek ? setWeekOffset : isQuarter ? setQuarterOffset : setMonthOffset;
           const monthDate = new Date(new Date().getFullYear(), new Date().getMonth() + monthOffset, 1);
+          const quarterRangeLabel = isQuarter
+            ? `${new Date(quarterDays[0] + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} – ${new Date(quarterDays[quarterDays.length - 1] + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}`
+            : '';
           const title = isWeek
             ? (weekOffset === 0
                 ? 'Letzte 7 Tage'
                 : `${new Date(weekDays[0] + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })} – ${new Date(weekDays[6] + 'T12:00:00').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}`)
-            : monthDate.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+            : isQuarter
+              ? (quarterOffset === 0 ? 'Letzte 3 Monate' : quarterRangeLabel)
+              : monthDate.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
 
           return (
             <>
@@ -3461,7 +3491,7 @@ ${trainingDays.filter(d => {
                   <button
                     onClick={() => setOffset(o => o - 1)}
                     className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 transition-colors"
-                    title={isWeek ? 'Vorherige Woche' : 'Vorheriger Monat'}
+                    title={isWeek ? 'Vorherige Woche' : isQuarter ? 'Vorheriges Quartal' : 'Vorheriger Monat'}
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
@@ -3470,7 +3500,7 @@ ${trainingDays.filter(d => {
                     onClick={() => setOffset(o => Math.min(0, o + 1))}
                     disabled={offset >= 0}
                     className="p-1.5 rounded-lg hover:bg-slate-200/60 text-slate-500 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    title={isWeek ? 'Nächste Woche' : 'Nächster Monat'}
+                    title={isWeek ? 'Nächste Woche' : isQuarter ? 'Nächstes Quartal' : 'Nächster Monat'}
                   >
                     <ChevronRight className="w-5 h-5" />
                   </button>
@@ -3514,6 +3544,7 @@ ${trainingDays.filter(d => {
                         { days: 14, label: '14 Tage' },
                         { days: 28, label: '4 Wochen' },
                         { days: 84, label: '12 Wochen' },
+                        { days: 91, label: '3 Monate' },
                       ].map(opt => (
                         <button
                           key={opt.days}
