@@ -113,23 +113,33 @@ export default async (req) => {
     // ── 1. Get fresh Strava access token ──────────────────────────────────────
     const accessToken = await refreshAccessToken();
 
-    // ── 2. Fetch last 30 days of activities ───────────────────────────────────
-    const after  = Math.floor((Date.now() - 30 * 86400 * 1000) / 1000);
+    // ── 2. Fetch last 95 Tage an Aktivitäten ──────────────────────────────────
+    // Deckt die Quartalsansicht (bis zu ~92 Tage) mit Puffer ab. Vorher waren es
+    // nur 30 Tage – für Monat/Quartal fehlte dadurch bei älteren Tagen der
+    // Sport-Kalorien-Abzug komplett (0 statt echtem Wert), was das Defizit/den
+    // Überschuss in längeren Zeiträumen massiv verzerrt hat. Mit Pagination,
+    // da bei 95 Tagen mehr als 100 Aktivitäten zusammenkommen können.
+    const after  = Math.floor((Date.now() - 95 * 86400 * 1000) / 1000);
     const before = Math.floor(Date.now() / 1000);
 
-    const activitiesRes = await fetch(
-      `${STRAVA_API}/athlete/activities?per_page=100&after=${after}&before=${before}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
+    const raw = [];
+    for (let page = 1; page <= 5; page++) {
+      const activitiesRes = await fetch(
+        `${STRAVA_API}/athlete/activities?per_page=200&page=${page}&after=${after}&before=${before}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
 
-    if (!activitiesRes.ok) {
-      const errText = await activitiesRes.text();
-      throw new Error(`Strava Activities API (${activitiesRes.status}): ${errText.slice(0, 300)}`);
-    }
+      if (!activitiesRes.ok) {
+        const errText = await activitiesRes.text();
+        throw new Error(`Strava Activities API (${activitiesRes.status}): ${errText.slice(0, 300)}`);
+      }
 
-    const raw = await activitiesRes.json();
-    if (!Array.isArray(raw)) {
-      throw new Error(`Unerwartetes Strava-Format: ${JSON.stringify(raw).slice(0, 200)}`);
+      const pageData = await activitiesRes.json();
+      if (!Array.isArray(pageData)) {
+        throw new Error(`Unerwartetes Strava-Format: ${JSON.stringify(pageData).slice(0, 200)}`);
+      }
+      raw.push(...pageData);
+      if (pageData.length < 200) break; // letzte Seite erreicht
     }
 
     // ── 3. Aggregate per calendar day ─────────────────────────────────────────

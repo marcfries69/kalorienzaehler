@@ -1121,9 +1121,19 @@ const KalorienTracker = () => {
       catch { throw new Error(`Sync-Training: Server gab kein JSON zurück (Status ${res.status})`); }
       if (!res.ok) throw new Error(json.error || `Training-Sync fehlgeschlagen (${res.status})`);
       if (!Array.isArray(json.days)) throw new Error('Unerwartetes Format von sync-training');
-      localStorage.setItem('training-days', JSON.stringify(json.days));
+      // Mergen statt ersetzen: der Server liefert nur ein rollierendes Fenster zurück
+      // (aktuell ~95 Tage). Ältere, bereits einmal synchronisierte Tage bleiben lokal
+      // erhalten, damit Monats-/Quartalsansichten für länger zurückliegende Zeiträume
+      // weiterhin den echten Sport-Kalorien-Abzug zeigen, statt nach dem nächsten Sync
+      // auf 0 zurückzufallen (Ursache verzerrter Defizit-/Überschuss-Werte in Quartal).
+      let existing = [];
+      try { existing = JSON.parse(localStorage.getItem('training-days') || '[]'); } catch { existing = []; }
+      const freshDates = new Set(json.days.map(d => d.date));
+      const merged = [...existing.filter(d => !freshDates.has(d.date)), ...json.days]
+        .sort((a, b) => a.date.localeCompare(b.date));
+      localStorage.setItem('training-days', JSON.stringify(merged));
       localStorage.setItem('training-sync-at', json.syncedAt);
-      setTrainingDays(json.days);
+      setTrainingDays(merged);
       setTrainingSyncAt(json.syncedAt);
     } catch (err) {
       setTrainingSyncError(err.message); // always surface error
