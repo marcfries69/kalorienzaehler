@@ -327,6 +327,13 @@ const KalorienTracker = () => {
     try { return JSON.parse(localStorage.getItem('training-days') || '[]'); } catch { return []; }
   });
   const [trainingSyncAt, setTrainingSyncAt] = useState(() => localStorage.getItem('training-sync-at') || null);
+  // Welcher Zeitraum bereits mit Strava synchronisiert wurde (unabhängig davon, ob an
+  // einzelnen Tagen darin wirklich trainiert wurde) – damit Monat/Quartal erkennen können,
+  // wenn der angezeigte Zeitraum außerhalb liegt und ein gezielter Nachsync nötig ist.
+  const [trainingSyncCoverage, setTrainingSyncCoverage] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('training-sync-coverage') || 'null'); } catch { return null; }
+  });
+  const [syncingRangeTraining, setSyncingRangeTraining] = useState(false);
   const [kiResult, setKiResult] = useState(() => {
     try {
       const r = JSON.parse(localStorage.getItem('ki-result') || 'null');
@@ -1108,24 +1115,26 @@ const KalorienTracker = () => {
   }, []);
 
   // ── Training sync ────────────────────────────────────────────────────────────
-  const syncTrainingData = async (silent = false) => {
+  // range optional: { from, to } (YYYY-MM-DD) für einen gezielten historischen Nachsync
+  // eines Zeitraums außerhalb des Default-Fensters (siehe Quartal/Monat-Reiter).
+  const syncTrainingData = async (silent = false, range = null) => {
     setTrainingSyncError(null);
     try {
       const res  = await fetch('/.netlify/functions/sync-training', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rules),
+        body: JSON.stringify({ rules, ...(range || {}) }),
       });
       let json;
       try { json = await res.json(); }
       catch { throw new Error(`Sync-Training: Server gab kein JSON zurück (Status ${res.status})`); }
       if (!res.ok) throw new Error(json.error || `Training-Sync fehlgeschlagen (${res.status})`);
       if (!Array.isArray(json.days)) throw new Error('Unerwartetes Format von sync-training');
-      // Mergen statt ersetzen: der Server liefert nur ein rollierendes Fenster zurück
-      // (aktuell ~95 Tage). Ältere, bereits einmal synchronisierte Tage bleiben lokal
-      // erhalten, damit Monats-/Quartalsansichten für länger zurückliegende Zeiträume
-      // weiterhin den echten Sport-Kalorien-Abzug zeigen, statt nach dem nächsten Sync
-      // auf 0 zurückzufallen (Ursache verzerrter Defizit-/Überschuss-Werte in Quartal).
+      // Mergen statt ersetzen: der Server liefert nur ein Fenster zurück (Default ~95 Tage,
+      // oder der angefragte range). Ältere, bereits einmal synchronisierte Tage bleiben
+      // lokal erhalten, damit Monats-/Quartalsansichten für länger zurückliegende
+      // Zeiträume weiterhin den echten Sport-Kalorien-Abzug zeigen, statt nach dem
+      // nächsten Sync auf 0 zurückzufallen (Ursache verzerrter Defizit-/Überschuss-Werte).
       let existing = [];
       try { existing = JSON.parse(localStorage.getItem('training-days') || '[]'); } catch { existing = []; }
       const freshDates = new Set(json.days.map(d => d.date));
@@ -1135,6 +1144,18 @@ const KalorienTracker = () => {
       localStorage.setItem('training-sync-at', json.syncedAt);
       setTrainingDays(merged);
       setTrainingSyncAt(json.syncedAt);
+
+      // Abgedeckten Zeitraum erweitern (nie verkleinern).
+      if (json.rangeFrom && json.rangeTo) {
+        setTrainingSyncCoverage(prev => {
+          const next = {
+            earliest: prev?.earliest && prev.earliest < json.rangeFrom ? prev.earliest : json.rangeFrom,
+            latest:   prev?.latest   && prev.latest   > json.rangeTo   ? prev.latest   : json.rangeTo,
+          };
+          localStorage.setItem('training-sync-coverage', JSON.stringify(next));
+          return next;
+        });
+      }
     } catch (err) {
       setTrainingSyncError(err.message); // always surface error
       console.warn('Training sync:', err.message);
@@ -3605,6 +3626,31 @@ ${trainingDays.filter(d => {
                 </div>
               ) : (
                 <>
+                  {/* Strava-Sync-Lücke: der angezeigte Zeitraum beginnt vor dem, was bisher
+                      synchronisiert wurde — Sport-Kalorien für diese Tage sind dann 0 statt
+                      echt, was Defizit/Überschuss verfälscht. Gezielter Nachsync genau für
+                      den angezeigten Zeitraum, ohne auf das Default-Fenster zu warten. */}
+                  {trainingSyncCoverage && days[0] < trainingSyncCoverage.earliest && (
+                    <div className="flex items-center gap-2 mb-4 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700">
+                      <Activity className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span className="flex-1">
+                        Sport-Kalorien für diesen Zeitraum teilweise noch nicht synchronisiert (bisher ab {trainingSyncCoverage.earliest}) — Defizit/Überschuss können dadurch verzerrt sein.
+                      </span>
+                      <button
+                        onClick={async () => {
+                          setSyncingRangeTraining(true);
+                          await syncTrainingData(false, { from: days[0], to: days[days.length - 1] });
+                          setSyncingRangeTraining(false);
+                        }}
+                        disabled={syncingRangeTraining}
+                        className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-semibold rounded-lg transition-colors"
+                      >
+                        {syncingRangeTraining ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                        Zeitraum synchronisieren
+                      </button>
+                    </div>
+                  )}
+
                   {/* Gewichtsentwicklung im Zeitraum — erste vs. letzte Körpergewichts-Messung
                       (aus Blood Analytics) innerhalb des aktuell gewählten Zeitraums. */}
                   {(() => {

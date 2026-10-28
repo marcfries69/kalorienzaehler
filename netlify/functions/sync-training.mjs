@@ -101,10 +101,18 @@ export default async (req) => {
       );
     }
 
-    // Optionale Regel-Einstellungen aus dem Frontend (POST-Body), sonst Defaults
+    // Body: { rules, from?, to? } – rules wie bisher, from/to (YYYY-MM-DD) optional für
+    // einen gezielten historischen Nachsync (z.B. ein älteres Quartal), sonst Default-
+    // Fenster der letzten 95 Tage.
     let rules = {};
+    let rangeFrom = null, rangeTo = null;
     if (req.method === 'POST') {
-      try { rules = await req.json(); } catch { rules = {}; }
+      try {
+        const body = await req.json();
+        rules = body.rules || {};
+        rangeFrom = body.from || null;
+        rangeTo   = body.to   || null;
+      } catch { rules = {}; }
     }
     // rules.stravaDeflation ist der ABZUG in % (z.B. 25 = "-25%") – der Multiplikator
     // ist daher der verbleibende Anteil (100-25)/100 = 0.75, nicht 25/100!
@@ -113,14 +121,20 @@ export default async (req) => {
     // ── 1. Get fresh Strava access token ──────────────────────────────────────
     const accessToken = await refreshAccessToken();
 
-    // ── 2. Fetch last 95 Tage an Aktivitäten ──────────────────────────────────
-    // Deckt die Quartalsansicht (bis zu ~92 Tage) mit Puffer ab. Vorher waren es
-    // nur 30 Tage – für Monat/Quartal fehlte dadurch bei älteren Tagen der
-    // Sport-Kalorien-Abzug komplett (0 statt echtem Wert), was das Defizit/den
-    // Überschuss in längeren Zeiträumen massiv verzerrt hat. Mit Pagination,
-    // da bei 95 Tagen mehr als 100 Aktivitäten zusammenkommen können.
-    const after  = Math.floor((Date.now() - 95 * 86400 * 1000) / 1000);
-    const before = Math.floor(Date.now() / 1000);
+    // ── 2. Zeitfenster bestimmen ───────────────────────────────────────────────
+    // Default: letzte 95 Tage (deckt die Quartalsansicht mit Puffer ab). Mit from/to
+    // kann gezielt ein älterer Zeitraum nachsynchronisiert werden (siehe Quartal/Monat-
+    // Reiter: "Zeitraum synchronisieren", wenn die Ansicht außerhalb des Default-Fensters
+    // liegt). Vorher gab es nur die letzten 30 Tage – für Monat/Quartal fehlte dadurch bei
+    // älteren Tagen der Sport-Kalorien-Abzug komplett (0 statt echtem Wert), was das
+    // Defizit/den Überschuss massiv verzerrt hat. Mit Pagination, da in einem größeren
+    // Fenster mehr als 100 Aktivitäten zusammenkommen können.
+    const after  = rangeFrom
+      ? Math.floor(new Date(rangeFrom + 'T00:00:00Z').getTime() / 1000)
+      : Math.floor((Date.now() - 95 * 86400 * 1000) / 1000);
+    const before = rangeTo
+      ? Math.floor(new Date(rangeTo + 'T23:59:59Z').getTime() / 1000)
+      : Math.floor(Date.now() / 1000);
 
     const raw = [];
     for (let page = 1; page <= 5; page++) {
@@ -218,6 +232,11 @@ export default async (req) => {
       syncedAt:   new Date().toISOString(),
       totalDays:  days.length,
       totalActivities: raw.length,
+      // Tatsächlich abgefragtes Fenster – der Client nutzt das, um zu tracken, welcher
+      // Zeitraum schon synchronisiert wurde (unabhängig davon, ob an einzelnen Tagen
+      // darin wirklich trainiert wurde).
+      rangeFrom: new Date(after * 1000).toISOString().slice(0, 10),
+      rangeTo:   new Date(before * 1000).toISOString().slice(0, 10),
     });
 
   } catch (err) {
