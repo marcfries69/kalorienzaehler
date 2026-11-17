@@ -419,12 +419,14 @@ const KalorienTracker = () => {
   // Ziel entsprechend hoch sein, damit das Defizit konstant bleibt.
   const capDailyGoal = (kcal) => Math.max(Math.round(kcal || 0), rules.kcalMinDaily);
 
-  // Intervall-Trainingstage mit hoher Belastung (>1100 kcal/kJ Strava, kJ-priorisiert):
+  // Intervall-Trainingstage mit hoher Belastung (VO2max, Schwelle/Threshold, HIIT):
   // kein Defizit – stattdessen volles Auffüllen auf Erhaltungsniveau, da der Körper nach
-  // intensiven Intervalleinheiten die volle Energie für die Regeneration braucht.
-  const isIntervalActivity = (a) => /vo2|intervall|interval|hiit/i.test(a?.name || '');
+  // intensiven Intervalleinheiten die volle Energie für die Regeneration braucht. Gilt
+  // unabhängig von Dauer/verbrannten Kalorien – bereits eine kurze VO2max- oder
+  // Schwelleneinheit ist glykogen-/erschöpfungstechnisch relevant genug.
+  const isIntervalActivity = (a) => /vo2|intervall|interval|hiit|schwelle|threshold/i.test(a?.name || '');
   const isFullRefuelDay = (training) =>
-    (training?.totalCalories || 0) > 1100 && (training?.activities || []).some(isIntervalActivity);
+    (training?.activities || []).some(isIntervalActivity);
   const dailyGoalFor = (training, restBase) =>
     capDailyGoal((isFullRefuelDay(training) ? rules.maintenanceBase : restBase) + sportKcalCredit(training));
 
@@ -2703,7 +2705,7 @@ ${trainingDays.filter(d => {
                     <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-violet-50 border border-violet-200 rounded-xl text-xs text-violet-700">
                       <Activity className="w-3.5 h-3.5 flex-shrink-0" />
                       <span className="leading-tight">
-                        Intervall-Volltag erkannt (&gt;1100 kcal) · kein Defizit, volles Auffüllen auf Erhaltungsniveau ({dayBurn} kcal verbrannt)
+                        Intervall-Volltag erkannt (VO2max/Schwelle) · kein Defizit, volles Auffüllen auf Erhaltungsniveau ({dayBurn} kcal verbrannt)
                       </span>
                     </div>
                   );
