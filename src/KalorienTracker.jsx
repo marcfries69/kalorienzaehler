@@ -2821,11 +2821,25 @@ ${trainingDays.filter(d => {
                         sub: `⚠️ ${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g für LDL) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` }
                     : { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200',
                         sub: `${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` },
+                  // Eigene Karte für ungesättigte Fette: Ziel = Fett-Ziel minus Gesättigt-Grenze,
+                  // also der Fett-Anteil, der übrig bleibt, wenn man sowohl das Fett-Ziel erreicht
+                  // als auch unter der Gesättigt-Grenze bleibt – macht "gutes Fett" genauso
+                  // sichtbar/messbar wie die anderen Makros statt nur als Unterzeile bei Fett.
+                  (() => {
+                    const unsatGoal = Math.max(macroGoalGrams.fat - satFatMaxG, 1);
+                    const unsatPctOfFat = totals.fat > 0 ? Math.round((totals.fatUnsaturated / totals.fat) * 100) : 0;
+                    return {
+                      label: 'Ungesättigte Fette', value: totals.fatUnsaturated, goal: unsatGoal,
+                      bar: 'bg-teal-500', from: 'from-teal-50', to: 'to-teal-100', border: 'border-teal-200',
+                      color: 'text-teal-600', num: 'text-teal-900', barBg: 'bg-teal-200',
+                      sub: `${unsatPctOfFat}% des bisherigen Fetts`,
+                    };
+                  })(),
                   { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: fiberSolubleUnder ? 'text-amber-600' : 'text-green-600',   num: 'text-green-900',  barBg: 'bg-green-200',
                     sub: `${Math.round(totals.fiberSoluble)}g löslich (Ziel ≥${rules.fiberSolubleGoal}g) · ${Math.round(totals.fiberInsoluble)}g unlöslich` },
                 ];
                 return (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {cards.map(s => {
                       const pct = Math.min((s.value / s.goal) * 100, 100);
                       const reached = s.value >= s.goal;
