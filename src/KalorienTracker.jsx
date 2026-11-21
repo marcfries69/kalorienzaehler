@@ -3417,6 +3417,14 @@ ${trainingDays.filter(d => {
                               </div>
                               <div className="flex items-center gap-2">
                                 <h4 className="font-semibold text-slate-800">{meal.name}</h4>
+                                {(meal.fatSaturated || 0) > 7 && (
+                                  <span
+                                    className="flex-shrink-0 w-4 h-4 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center"
+                                    title={`${Math.round((meal.fatSaturated || 0) * 10) / 10}g gesättigte Fettsäuren – viel für eine einzelne Mahlzeit`}
+                                  >
+                                    !
+                                  </span>
+                                )}
                                 <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                               </div>
                             </div>
