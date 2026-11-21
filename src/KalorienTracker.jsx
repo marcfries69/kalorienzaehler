@@ -2816,11 +2816,19 @@ ${trainingDays.filter(d => {
                 const cards = [
                   { label: 'Protein',       value: totals.protein, goal: macroGoalGrams.protein, bar: 'bg-blue-500',   from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900',   barBg: 'bg-blue-200'   },
                   { label: 'Kohlenhydrate', value: totals.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-500',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900',  barBg: 'bg-amber-200',  sub: `${Math.round(totals.carbsComplex)}g komplex · ${Math.round(totals.carbsSimple)}g einfach` },
-                  satFatOver
-                    ? { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-red-500',    from: 'from-red-50',    to: 'to-red-100',    border: 'border-red-300',    color: 'text-red-600',    num: 'text-red-900',    barBg: 'bg-red-200',
-                        sub: `⚠️ ${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g für LDL) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` }
-                    : { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200',
-                        sub: `${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` },
+                  // Ungesättigte Fette: ersetzt die frühere generische "Fett"-Karte. Ziel = Fett-Ziel
+                  // minus Gesättigt-Grenze, also der Fett-Anteil, der übrig bleibt, wenn man sowohl
+                  // das Fett-Ziel erreicht als auch unter der Gesättigt-Grenze bleibt.
+                  (() => {
+                    const unsatGoal = Math.max(macroGoalGrams.fat - satFatMaxG, 1);
+                    const unsatPctOfFat = totals.fat > 0 ? Math.round((totals.fatUnsaturated / totals.fat) * 100) : 0;
+                    return {
+                      label: 'Ungesättigte Fette', value: totals.fatUnsaturated, goal: unsatGoal,
+                      bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200',
+                      color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200',
+                      sub: `${unsatPctOfFat}% des bisherigen Fetts`,
+                    };
+                  })(),
                   // Eigene Karte für gesättigte Fette gegen die feste Tagesgrenze (rules.satFatGoal) –
                   // isCeiling: true, da hier NICHT das Erreichen des Ziels gut ist, sondern das
                   // Unterschreiten (umgekehrte Logik ggü. Protein/Carbs/Ballaststoffe).
