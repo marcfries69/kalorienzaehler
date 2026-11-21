@@ -2821,20 +2821,17 @@ ${trainingDays.filter(d => {
                         sub: `⚠️ ${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g für LDL) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` }
                     : { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200',
                         sub: `${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` },
-                  // Eigene Karte für ungesättigte Fette: Ziel = Fett-Ziel minus Gesättigt-Grenze,
-                  // also der Fett-Anteil, der übrig bleibt, wenn man sowohl das Fett-Ziel erreicht
-                  // als auch unter der Gesättigt-Grenze bleibt – macht "gutes Fett" genauso
-                  // sichtbar/messbar wie die anderen Makros statt nur als Unterzeile bei Fett.
-                  (() => {
-                    const unsatGoal = Math.max(macroGoalGrams.fat - satFatMaxG, 1);
-                    const unsatPctOfFat = totals.fat > 0 ? Math.round((totals.fatUnsaturated / totals.fat) * 100) : 0;
-                    return {
-                      label: 'Ungesättigte Fette', value: totals.fatUnsaturated, goal: unsatGoal,
-                      bar: 'bg-teal-500', from: 'from-teal-50', to: 'to-teal-100', border: 'border-teal-200',
-                      color: 'text-teal-600', num: 'text-teal-900', barBg: 'bg-teal-200',
-                      sub: `${unsatPctOfFat}% des bisherigen Fetts`,
-                    };
-                  })(),
+                  // Eigene Karte für gesättigte Fette gegen die feste Tagesgrenze (rules.satFatGoal) –
+                  // isCeiling: true, da hier NICHT das Erreichen des Ziels gut ist, sondern das
+                  // Unterschreiten (umgekehrte Logik ggü. Protein/Carbs/Ballaststoffe).
+                  {
+                    label: 'Gesättigte Fette', value: totals.fatSaturated, goal: satFatMaxG, isCeiling: true,
+                    bar: 'bg-rose-500', from: satFatOver ? 'from-rose-50' : 'from-teal-50', to: satFatOver ? 'to-rose-100' : 'to-teal-100',
+                    border: satFatOver ? 'border-rose-300' : 'border-teal-200',
+                    color: satFatOver ? 'text-rose-600' : 'text-teal-600', num: satFatOver ? 'text-rose-900' : 'text-teal-900',
+                    barBg: satFatOver ? 'bg-rose-200' : 'bg-teal-200',
+                    sub: 'für niedriges LDL',
+                  },
                   { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: fiberSolubleUnder ? 'text-amber-600' : 'text-green-600',   num: 'text-green-900',  barBg: 'bg-green-200',
                     sub: `${Math.round(totals.fiberSoluble)}g löslich (Ziel ≥${rules.fiberSolubleGoal}g) · ${Math.round(totals.fiberInsoluble)}g unlöslich` },
                 ];
@@ -2842,7 +2839,9 @@ ${trainingDays.filter(d => {
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {cards.map(s => {
                       const pct = Math.min((s.value / s.goal) * 100, 100);
-                      const reached = s.value >= s.goal;
+                      // Bei isCeiling-Karten (z.B. gesättigte Fette) ist UNTERSCHREITEN gut, nicht
+                      // Erreichen/Überschreiten wie bei den übrigen Makros – Logik daher umgekehrt.
+                      const reached = s.isCeiling ? s.value <= s.goal : s.value >= s.goal;
                       const remaining = Math.round(s.goal - s.value);
                       return (
                         <div key={s.label} className={`stat-card bg-gradient-to-br ${s.from} ${s.to} rounded-xl p-4 border ${s.border}`}>
@@ -2850,11 +2849,13 @@ ${trainingDays.filter(d => {
                             <p className={`${s.color} text-xs font-semibold uppercase tracking-wide`}>{s.label}</p>
                             {reached
                               ? <span className="text-xs text-green-600 font-bold">✓</span>
-                              : <span className={`text-xs ${s.color} opacity-70`}>-{remaining}g</span>
+                              : s.isCeiling
+                                ? <span className="text-xs text-rose-600 font-bold">+{Math.abs(remaining)}g über</span>
+                                : <span className={`text-xs ${s.color} opacity-70`}>-{remaining}g</span>
                             }
                           </div>
                           <p className={`text-2xl font-bold ${s.num} mono`}>{Math.round(s.value)}g</p>
-                          <p className={`text-xs ${s.color} opacity-60 mb-2`}>Ziel: {s.goal}g{s.sub ? ` · ${s.sub}` : ''}</p>
+                          <p className={`text-xs ${s.color} opacity-60 mb-2`}>{s.isCeiling ? 'Grenze' : 'Ziel'}: {s.goal}g{s.sub ? ` · ${s.sub}` : ''}</p>
                           <div className={`h-1.5 ${s.barBg} rounded-full overflow-hidden`}>
                             <div
                               className={`h-full rounded-full transition-all duration-500 ${reached ? 'bg-green-500' : s.bar}`}
