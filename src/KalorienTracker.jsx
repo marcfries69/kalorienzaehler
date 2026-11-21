@@ -146,34 +146,36 @@ const DEFAULT_RULES = {
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
   macroCycle: { protein: 150, carbs: 300, fat: 85 }, // Zone2 ≥90min / VO2max-Rad
-  fiberGoal: 40,
-  // AHA-Richtwert zur LDL-Senkung (strenger als die allgemeine WHO/DGE-Empfehlung von 10%
-  // der Kalorien) – gesättigte Fettsäuren sollen unter diesem Anteil der Tageskalorien bleiben.
-  satFatMaxPct: 7,
+  fiberGoal: 40,          // Ballaststoffe gesamt/Tag
+  fiberSolubleGoal: 10,   // davon mindestens löslich (cholesterinsenkend)
+  satFatGoal: 17,         // Gesättigte Fettsäuren – feste Tagesgrenze in g (LDL-Ziel)
   carbHour1:     40, // g/h, 1. Stunde (moderat)
   carbHour2:     60, // g/h, 2. Stunde (moderat)
   carbHour3plus: 80, // g/h, ab 3. Stunde (moderat)
   carbIntense:   80, // g/h, sehr intensiv (Z4/Z5/Z6) von Beginn an
 };
 
-// Erzwungene Migration auf die neue Erhaltungs-/Defizit-Basis (2100/1900/200) und das
-// Ballaststoff-Ziel (40g), unabhängig vom vorherigen Wert. Ein Abgleich gegen die alten
-// Defaults reicht NICHT – wer die Regeln vorher schon einmal manuell angepasst hatte, wird
-// von einem exakten Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen
-// Werten stehen. Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind
-// erneute manuelle Anpassungen wieder verbindlich.
-const RULES_MIGRATION_VERSION = 6;
+// Erzwungene Migration auf die neue Erhaltungs-/Defizit-Basis (2100/1900/200), das
+// Ballaststoff-Ziel (40g, davon 10g löslich) und die feste Gesättigt-Fett-Grenze (17g),
+// unabhängig vom vorherigen Wert. Ein Abgleich gegen die alten Defaults reicht NICHT –
+// wer die Regeln vorher schon einmal manuell angepasst hatte, wird von einem exakten
+// Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen Werten stehen.
+// Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind erneute
+// manuelle Anpassungen wieder verbindlich.
+const RULES_MIGRATION_VERSION = 7;
 
 const loadRules = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(RULES_STORAGE_KEY) || 'null');
     if (!saved) return { ...DEFAULT_RULES, __migrationVersion: RULES_MIGRATION_VERSION };
     if (!(saved.__migrationVersion >= RULES_MIGRATION_VERSION)) {
-      saved.maintenanceBase  = DEFAULT_RULES.maintenanceBase;
-      saved.kcalMinDaily     = DEFAULT_RULES.kcalMinDaily;
-      saved.kcalRestBase     = DEFAULT_RULES.kcalRestBase;
-      saved.referenceDeficit = DEFAULT_RULES.referenceDeficit;
-      saved.fiberGoal        = DEFAULT_RULES.fiberGoal;
+      saved.maintenanceBase   = DEFAULT_RULES.maintenanceBase;
+      saved.kcalMinDaily      = DEFAULT_RULES.kcalMinDaily;
+      saved.kcalRestBase      = DEFAULT_RULES.kcalRestBase;
+      saved.referenceDeficit  = DEFAULT_RULES.referenceDeficit;
+      saved.fiberGoal         = DEFAULT_RULES.fiberGoal;
+      saved.fiberSolubleGoal  = DEFAULT_RULES.fiberSolubleGoal;
+      saved.satFatGoal        = DEFAULT_RULES.satFatGoal;
       saved.__migrationVersion = RULES_MIGRATION_VERSION;
       // calorieGoal wirkt in mehreren Berechnungen als Fallback vor kcalRestBase – ein alter
       // Wert würde die gerade erzwungene Migration sonst wieder überschreiben.
@@ -182,6 +184,7 @@ const loadRules = () => {
       localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(saved));
     }
     delete saved.useKjForPowerRides; // Regel jetzt fest: kJ immer 1:1, kein Vergleich mehr
+    delete saved.satFatMaxPct; // ersetzt durch satFatGoal (feste Gramm-Grenze statt Prozent)
     return {
       ...DEFAULT_RULES,
       ...saved,
@@ -929,9 +932,11 @@ const KalorienTracker = () => {
       carbsSimple:  acc.carbsSimple  + (m.carbsSimple  || 0),
       fatSaturated:   acc.fatSaturated   + (m.fatSaturated   || 0),
       fatUnsaturated: acc.fatUnsaturated + (m.fatUnsaturated || 0),
+      fiberSoluble:   acc.fiberSoluble   + (m.fiberSoluble   || 0),
+      fiberInsoluble: acc.fiberInsoluble + (m.fiberInsoluble || 0),
       fruit:     acc.fruit     + (m.fruitG     || 0),
       vegetable: acc.vegetable + (m.vegetableG || 0),
-    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0, fruit: 0, vegetable: 0 });
+    }), { kcal: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, caffeine: 0, carbsComplex: 0, carbsSimple: 0, fatSaturated: 0, fatUnsaturated: 0, fiberSoluble: 0, fiberInsoluble: 0, fruit: 0, vegetable: 0 });
     return {
       user_id: NUTRITION_USER_ID, date: dateKey,
       total_kcal: Math.round(totals.kcal), protein_g: Math.round(totals.protein * 10) / 10,
@@ -942,6 +947,8 @@ const KalorienTracker = () => {
       carbs_simple_g:  Math.round(totals.carbsSimple  * 10) / 10,
       fat_saturated_g:   Math.round(totals.fatSaturated   * 10) / 10,
       fat_unsaturated_g: Math.round(totals.fatUnsaturated * 10) / 10,
+      fiber_soluble_g:   Math.round(totals.fiberSoluble   * 10) / 10,
+      fiber_insoluble_g: Math.round(totals.fiberInsoluble * 10) / 10,
       fruit_g:     Math.round(totals.fruit),
       vegetable_g: Math.round(totals.vegetable),
       kcal_goal: goal,
@@ -1472,6 +1479,8 @@ const KalorienTracker = () => {
       fatSaturated:   acc.fatSaturated   + (meal.fatSaturated   || 0),
       fatUnsaturated: acc.fatUnsaturated + (meal.fatUnsaturated || 0),
       fiber:   acc.fiber   + (meal.fiber   || 0),
+      fiberSoluble:   acc.fiberSoluble   + (meal.fiberSoluble   || 0),
+      fiberInsoluble: acc.fiberInsoluble + (meal.fiberInsoluble || 0),
       caffeine:       acc.caffeine       + (meal.caffeine || 0),
       caffeineBefore13: acc.caffeineBefore13 + (meal.time < '13:00' ? (meal.caffeine || 0) : 0),
       caffeineAfter13:  acc.caffeineAfter13  + (meal.time >= '13:00' ? (meal.caffeine || 0) : 0),
@@ -1488,6 +1497,7 @@ const KalorienTracker = () => {
       folate:     acc.folate     + (mn.folate     || 0),
     };
   }, { kcal: 0, protein: 0, carbs: 0, carbsComplex: 0, carbsSimple: 0, fat: 0, fatSaturated: 0, fatUnsaturated: 0, fiber: 0,
+       fiberSoluble: 0, fiberInsoluble: 0,
        caffeine: 0, caffeineBefore13: 0, caffeineAfter13: 0, fruit: 0, vegetable: 0,
        calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0,
        vitaminC: 0, vitaminD: 0, vitaminB12: 0, folate: 0 });
@@ -2095,7 +2105,7 @@ const KalorienTracker = () => {
         fat:     Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fat     || 0), 0)),
         fatSaturated:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fatSaturated   || 0), 0)),
         fatUnsaturated: Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fatUnsaturated || 0), 0)),
-        satFatMaxG: Math.round((dayGoal * rules.satFatMaxPct / 100) / 9),
+        satFatMaxG: rules.satFatGoal,
         fiber:   Math.round(meals.filter(m => !m.isAutoCorrection).reduce((a, m) => a + (m.fiber   || 0), 0)),
         // Makros ab 18 Uhr – für die Ernährung×Schlaf-Auswertung in der Historie.
         eveningKcal:    Math.round(meals.filter(m => !m.isAutoCorrection && m.time >= '18:00').reduce((a, m) => a + (m.kcal    || 0), 0)),
@@ -2799,10 +2809,10 @@ ${trainingDays.filter(d => {
 
               {/* Macro cards with progress */}
               {(() => {
-                // LDL-Ziel: gesättigte Fettsäuren sollen unter satFatMaxPct% der Tageskalorien
-                // bleiben (AHA-Richtwert, strenger als die allgemeine 10%-Empfehlung) — 9 kcal/g.
-                const satFatMaxG = Math.round((effectiveGoal * rules.satFatMaxPct / 100) / 9);
+                // LDL-Ziel: gesättigte Fettsäuren sollen unter der festen Tagesgrenze bleiben.
+                const satFatMaxG = rules.satFatGoal;
                 const satFatOver = totals.fatSaturated > satFatMaxG;
+                const fiberSolubleUnder = totals.fiberSoluble < rules.fiberSolubleGoal;
                 const cards = [
                   { label: 'Protein',       value: totals.protein, goal: macroGoalGrams.protein, bar: 'bg-blue-500',   from: 'from-blue-50',   to: 'to-blue-100',   border: 'border-blue-200',   color: 'text-blue-600',   num: 'text-blue-900',   barBg: 'bg-blue-200'   },
                   { label: 'Kohlenhydrate', value: totals.carbs,   goal: macroGoalGrams.carbs,   bar: 'bg-amber-500',  from: 'from-amber-50',  to: 'to-amber-100',  border: 'border-amber-200',  color: 'text-amber-600',  num: 'text-amber-900',  barBg: 'bg-amber-200',  sub: `${Math.round(totals.carbsComplex)}g komplex · ${Math.round(totals.carbsSimple)}g einfach` },
@@ -2811,7 +2821,8 @@ ${trainingDays.filter(d => {
                         sub: `⚠️ ${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g für LDL) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` }
                     : { label: 'Fett',        value: totals.fat,   goal: macroGoalGrams.fat,     bar: 'bg-purple-500', from: 'from-purple-50', to: 'to-purple-100', border: 'border-purple-200', color: 'text-purple-600', num: 'text-purple-900', barBg: 'bg-purple-200',
                         sub: `${Math.round(totals.fatSaturated)}g gesättigt (Ziel <${satFatMaxG}g) · ${Math.round(totals.fatUnsaturated)}g ungesättigt` },
-                  { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: 'text-green-600',  num: 'text-green-900',  barBg: 'bg-green-200'  },
+                  { label: 'Ballaststoffe', value: totals.fiber,   goal: macroGoalGrams.fiber,   bar: 'bg-green-500',  from: 'from-green-50',  to: 'to-green-100',  border: 'border-green-200',  color: fiberSolubleUnder ? 'text-amber-600' : 'text-green-600',   num: 'text-green-900',  barBg: 'bg-green-200',
+                    sub: `${Math.round(totals.fiberSoluble)}g löslich (Ziel ≥${rules.fiberSolubleGoal}g) · ${Math.round(totals.fiberInsoluble)}g unlöslich` },
                 ];
                 return (
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -2951,21 +2962,27 @@ ${trainingDays.filter(d => {
                 );
               })()}
 
-              {/* Gesättigte Fettsäuren: prominente Tages-Ampel mit festen Grenzwerten
-                  (LDL-Ziel) — bewusst absolut in Gramm statt prozentual wie die Fett-Karte
-                  oben, damit auf einen Blick klar ist, ob der Tag kritisch ist. */}
+              {/* Gesättigte Fettsäuren: prominente Tages-Ampel gegen die feste Tagesgrenze
+                  (rules.satFatGoal, aktuell 17g) — bewusst absolut in Gramm statt prozentual
+                  wie früher, damit auf einen Blick klar ist, ob der Tag kritisch ist. Darunter
+                  Beitrag pro Mahlzeit, damit erkennbar ist, welche Mahlzeit den Wert treibt. */}
               {totals.fatSaturated > 0 && (() => {
-                const satFat = Math.round(totals.fatSaturated);
-                const tone = satFat > 20
-                  ? { bg: 'from-rose-50 to-red-50', border: 'border-rose-300', dot: 'bg-rose-500', text: 'text-rose-700', label: 'Zu hoch für LDL-Ziel' }
-                  : satFat > 15
-                    ? { bg: 'from-amber-50 to-yellow-50', border: 'border-amber-300', dot: 'bg-amber-500', text: 'text-amber-700', label: 'Erhöht — im Blick behalten' }
-                    : { bg: 'from-emerald-50 to-teal-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', label: 'Im grünen Bereich' };
+                const satFat = Math.round(totals.fatSaturated * 10) / 10;
+                const goal = rules.satFatGoal;
+                const tone = satFat > goal
+                  ? { bg: 'from-rose-50 to-red-50', border: 'border-rose-300', dot: 'bg-rose-500', text: 'text-rose-700', label: `Über dem Ziel von ${goal}g` }
+                  : satFat >= goal * 0.85
+                    ? { bg: 'from-amber-50 to-yellow-50', border: 'border-amber-300', dot: 'bg-amber-500', text: 'text-amber-700', label: `Nah am Ziel von ${goal}g` }
+                    : { bg: 'from-emerald-50 to-teal-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', label: `Im Ziel (< ${goal}g)` };
+                const contributors = currentMeals
+                  .filter(m => !m.isAutoCorrection && !m.isExcluded && (m.fatSaturated || 0) > 0)
+                  .slice()
+                  .sort((a, b) => (b.fatSaturated || 0) - (a.fatSaturated || 0));
                 return (
                   <div className="mt-4 pt-4 border-t border-slate-100">
                     <div className={`flex items-center justify-between rounded-xl px-4 py-3 border bg-gradient-to-br ${tone.bg} ${tone.border}`}>
                       <div className="flex items-center gap-3">
-                        <span className={`w-3 h-3 rounded-full flex-shrink-0 ${tone.dot} ${satFat > 20 ? 'animate-pulse' : ''}`} />
+                        <span className={`w-3 h-3 rounded-full flex-shrink-0 ${tone.dot} ${satFat > goal ? 'animate-pulse' : ''}`} />
                         <div>
                           <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Gesättigte Fettsäuren heute</p>
                           <p className={`text-xs font-medium ${tone.text}`}>{tone.label}</p>
@@ -2973,6 +2990,76 @@ ${trainingDays.filter(d => {
                       </div>
                       <p className={`text-2xl font-bold mono ${tone.text}`}>{satFat}g</p>
                     </div>
+                    {contributors.length > 0 && (
+                      <div className="mt-2 bg-white/60 border border-slate-100 rounded-xl p-3">
+                        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Beitrag pro Mahlzeit</p>
+                        <div className="space-y-1.5">
+                          {contributors.map((m, i) => (
+                            <div key={m.id ?? i} className="flex items-center justify-between text-xs gap-2">
+                              <span className="text-slate-600 truncate">{m.time ? `${m.time} · ` : ''}{m.name}</span>
+                              <span className="font-semibold text-slate-700 mono flex-shrink-0">{Math.round((m.fatSaturated || 0) * 10) / 10}g</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Ballaststoffe: Gesamt- und lösliche Ballaststoffe gegen Ziel (40g, davon
+                  ≥10g löslich), plus Beitrag pro Mahlzeit. */}
+              {totals.fiber > 0 && (() => {
+                const fiberTotal = Math.round(totals.fiber * 10) / 10;
+                const fiberSoluble = Math.round(totals.fiberSoluble * 10) / 10;
+                const totalGoal = rules.fiberGoal;
+                const solubleGoal = rules.fiberSolubleGoal;
+                const totalMet = fiberTotal >= totalGoal;
+                const solubleMet = fiberSoluble >= solubleGoal;
+                const tone = (totalMet && solubleMet)
+                  ? { bg: 'from-emerald-50 to-teal-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700' }
+                  : (totalMet || solubleMet)
+                    ? { bg: 'from-amber-50 to-yellow-50', border: 'border-amber-300', dot: 'bg-amber-500', text: 'text-amber-700' }
+                    : { bg: 'from-slate-50 to-stone-50', border: 'border-slate-200', dot: 'bg-slate-400', text: 'text-slate-500' };
+                const contributors = currentMeals
+                  .filter(m => !m.isAutoCorrection && !m.isExcluded && (m.fiber || 0) > 0)
+                  .slice()
+                  .sort((a, b) => (b.fiber || 0) - (a.fiber || 0));
+                return (
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className={`flex items-center justify-between rounded-xl px-4 py-3 border bg-gradient-to-br ${tone.bg} ${tone.border}`}>
+                      <div className="flex items-center gap-3">
+                        <span className={`w-3 h-3 rounded-full flex-shrink-0 ${tone.dot}`} />
+                        <div>
+                          <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Ballaststoffe heute</p>
+                          <p className={`text-xs font-medium ${tone.text}`}>
+                            {totalMet ? '✓' : `noch ${Math.round((totalGoal - fiberTotal) * 10) / 10}g`} bis {totalGoal}g gesamt
+                            {' · '}
+                            {solubleMet ? '✓' : `noch ${Math.round((solubleGoal - fiberSoluble) * 10) / 10}g`} bis {solubleGoal}g löslich
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-2xl font-bold mono ${tone.text}`}>{fiberTotal}g</p>
+                        <p className="text-[10px] text-slate-400">{fiberSoluble}g löslich · {Math.round((totals.fiberInsoluble || 0) * 10) / 10}g unlöslich</p>
+                      </div>
+                    </div>
+                    {contributors.length > 0 && (
+                      <div className="mt-2 bg-white/60 border border-slate-100 rounded-xl p-3">
+                        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Beitrag pro Mahlzeit</p>
+                        <div className="space-y-1.5">
+                          {contributors.map((m, i) => (
+                            <div key={m.id ?? i} className="flex items-center justify-between text-xs gap-2">
+                              <span className="text-slate-600 truncate">{m.time ? `${m.time} · ` : ''}{m.name}</span>
+                              <span className="font-semibold text-slate-700 mono flex-shrink-0">
+                                {Math.round((m.fiber || 0) * 10) / 10}g
+                                <span className="text-slate-400 font-normal"> ({Math.round((m.fiberSoluble || 0) * 10) / 10}/{Math.round((m.fiberInsoluble || 0) * 10) / 10})</span>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -3359,6 +3446,11 @@ ${trainingDays.filter(d => {
                                 </span>
                               )}
                             </span>
+                            {meal.fiber > 0 && (
+                              <span className="px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium mono" title={`löslich ${Math.round(meal.fiberSoluble || 0)}g · unlöslich ${Math.round(meal.fiberInsoluble || 0)}g`}>
+                                Bal: {Math.round(meal.fiber)}g
+                              </span>
+                            )}
                             {meal.caffeine > 0 && (
                               <span className="px-3 py-1 rounded-full bg-stone-200 text-stone-700 text-xs font-medium mono">☕ {Math.round(meal.caffeine)}mg</span>
                             )}
@@ -4118,7 +4210,7 @@ ${trainingDays.filter(d => {
                       <h3 className="text-lg font-bold text-slate-800">Gesättigte Fettsäuren pro Tag</h3>
                       <span className="text-xs text-slate-400">Ø {Math.round(stats.dayData.reduce((s, d) => s + d.fatSaturated, 0) / stats.dayData.length)}g</span>
                     </div>
-                    <p className="text-xs text-slate-400 mb-4">Für niedriges LDL-Cholesterin · gestrichelt = Tagesgrenze ({rules.satFatMaxPct}% der Kalorien) · Klick auf einen Tag → Tagesdetails öffnen</p>
+                    <p className="text-xs text-slate-400 mb-4">Für niedriges LDL-Cholesterin · gestrichelt = Tagesgrenze ({rules.satFatGoal}g) · Klick auf einen Tag → Tagesdetails öffnen</p>
                     <div className="flex items-end gap-1" style={{ height: '110px' }}>
                       {(() => {
                         const maxVal = Math.max(...stats.dayData.map(d => Math.max(d.fatSaturated, d.satFatMaxG)), 1);
@@ -6211,6 +6303,24 @@ ${trainingDays.filter(d => {
                     type="number"
                     value={rulesDraft.fiberGoal}
                     onChange={(e) => setRulesDraft({ ...rulesDraft, fiberGoal: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">davon löslich, mind. <span className="text-slate-300">g</span></label>
+                  <input
+                    type="number"
+                    value={rulesDraft.fiberSolubleGoal}
+                    onChange={(e) => setRulesDraft({ ...rulesDraft, fiberSolubleGoal: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Gesättigte Fettsäuren – Tagesgrenze <span className="text-slate-300">g</span></label>
+                  <input
+                    type="number"
+                    value={rulesDraft.satFatGoal}
+                    onChange={(e) => setRulesDraft({ ...rulesDraft, satFatGoal: parseInt(e.target.value) || 0 })}
                     className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
                   />
                 </div>
