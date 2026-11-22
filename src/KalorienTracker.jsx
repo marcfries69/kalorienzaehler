@@ -142,6 +142,7 @@ const DEFAULT_RULES = {
   kcalMinDaily:    1900, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
   maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
   referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
+  autoCalibrate:   true, // Erhaltung aus Gewichtstrend + Aufnahme ableiten (ersetzt maintenanceBase/kcalRestBase/kcalMinDaily)
   stravaDeflation:  25,  // % Abzug auf Strava-Kalorien ohne kJ-Wert (Überschätzungskorrektur)
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
@@ -163,6 +164,17 @@ const DEFAULT_RULES = {
 // Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind erneute
 // manuelle Anpassungen wieder verbindlich.
 const RULES_MIGRATION_VERSION = 7;
+
+// Selbstkalibrierung der Erhaltung: Fenster und Mindestdatenmenge, ab der das Ergebnis
+// belastbar genug ist (6 Wochen glätten Wasserschwankungen der Waage weitgehend aus).
+const CALIB_WINDOW_DAYS  = 42;
+const CALIB_MIN_TRACKED  = 20;
+const CALIB_MIN_WEIGHTS  = 8;
+const CALIB_MIN_SPAN     = 21;
+const KCAL_PER_KG        = 7700;
+const CALIB_MAX_DOWN     = 600; // max. Abweichung von der manuellen Erhaltung nach unten/oben
+const CALIB_MAX_UP       = 400;
+const CALIB_ABS_FLOOR    = 1500;
 
 const loadRules = () => {
   try {
@@ -342,10 +354,11 @@ const KalorienTracker = () => {
       const r = JSON.parse(localStorage.getItem('ki-result') || 'null');
       // Discard stale results where calories were null (old bug)
       if (r && !r.kcalGoalRestDay && !r.kcalGoal) return null;
-      // Invalidate cache if base calorie target changed (now 1900), if it still carries the
-      // removed kcalGoalVo2Day field (old VO2max-base scheme), or rest-day macros are stale
+      // Invalidate cache if it still carries the removed kcalGoalVo2Day field (old VO2max-base
+      // scheme) or rest-day macros are stale. Die Ruhetags-Basis selbst ist durch die
+      // Selbstkalibrierung variabel und wird daher nicht mehr gegen einen festen Wert geprüft.
       const staleRestMacros = r?.macroGoalsRestDay && (r.macroGoalsRestDay.carbsG !== 150 || r.macroGoalsRestDay.proteinG !== 150);
-      if (r && r.kcalGoalRestDay && (r.kcalGoalRestDay !== 1900 || 'kcalGoalVo2Day' in r || staleRestMacros)) {
+      if (r && r.kcalGoalRestDay && ('kcalGoalVo2Day' in r || staleRestMacros)) {
         localStorage.removeItem('ki-result');
         return null;
       }
@@ -362,15 +375,92 @@ const KalorienTracker = () => {
   const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
 
   // ── Regel-Einstellungen ───────────────────────────────────────────────────────
-  const [rules, setRules] = useState(loadRules);
+  const [manualRules, setManualRules] = useState(loadRules);
   const [showRulesSettings, setShowRulesSettings] = useState(false);
   const [rulesDraft, setRulesDraft] = useState(null);
   const [validatingRules, setValidatingRules] = useState(false);
   const [rulesErrors, setRulesErrors] = useState([]);
   const [rulesWarnings, setRulesWarnings] = useState([]);
 
+  // ── Selbstkalibrierende Erhaltung ────────────────────────────────────────────
+  // Die feste Annahme (maintenanceBase + Sport) lag über 4 Monate ~225 kcal/Tag über dem
+  // tatsächlichen Verbrauch: Ø Defizit laut App ~200 kcal, Gewicht trotzdem leicht steigend.
+  // Daher wird die Erhaltung ohne Sport aus den echten Daten der letzten 6 Wochen abgeleitet:
+  //   Verbrauch = Ø Aufnahme voll erfasster Tage − Gewichtstrend × 7700 kcal/kg
+  //   Erhaltung = Verbrauch − Ø Sportgutschrift derselben Tage
+  // So gleicht das Modell alle Fehlerquellen (Brutto-Sportkalorien, Schätzwerte,
+  // Erfassungslücken) automatisch aus, statt eine einzelne Annahme zu korrigieren.
+  const calibration = useMemo(() => {
+    if (manualRules.autoCalibrate === false) return { active: false, reason: 'deaktiviert' };
+
+    const end = new Date(); end.setDate(end.getDate() - 1); // heute ist noch unvollständig
+    const start = new Date(end); start.setDate(end.getDate() - (CALIB_WINDOW_DAYS - 1));
+    const startKey = toDateKey(start), endKey = toDateKey(end);
+
+    const trainMap = {};
+    trainingDays.forEach(t => { trainMap[t.date] = t; });
+    const tracked = [];
+    for (const [date, meals] of Object.entries(history)) {
+      if (date < startKey || date > endKey || !Array.isArray(meals)) continue;
+      if (meals.some(m => m.isExcluded)) continue;
+      const kcal = meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0);
+      if (kcal < 1500) continue; // unvollständig erfasst – Aufnahme unbekannt
+      tracked.push({ kcal, sport: Math.round(trainMap[date]?.totalCalories || 0) });
+    }
+    if (tracked.length < CALIB_MIN_TRACKED) {
+      return { active: false, reason: `erst ${tracked.length} voll erfasste Tage in 6 Wochen (mind. ${CALIB_MIN_TRACKED})` };
+    }
+
+    const pts = bodyMeasurements
+      .filter(m => m.weight != null && m.date >= startKey && m.date <= todayKey)
+      .map(m => [(new Date(m.date + 'T12:00:00') - start) / 86400000, m.weight]);
+    const span = pts.length ? Math.max(...pts.map(p => p[0])) - Math.min(...pts.map(p => p[0])) : 0;
+    if (pts.length < CALIB_MIN_WEIGHTS || span < CALIB_MIN_SPAN) {
+      return { active: false, reason: `zu wenige Gewichtsmessungen (${pts.length}, mind. ${CALIB_MIN_WEIGHTS} über ${CALIB_MIN_SPAN} Tage)` };
+    }
+
+    const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+    const my = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+    const slope = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0)
+                / pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0); // kg/Tag
+    const avgIntake = tracked.reduce((s, d) => s + d.kcal, 0) / tracked.length;
+    const avgSport  = tracked.reduce((s, d) => s + d.sport, 0) / tracked.length;
+    const tdee      = avgIntake - slope * KCAL_PER_KG;
+    const raw       = tdee - avgSport;
+    const manual    = manualRules.maintenanceBase;
+    const bounded   = Math.min(manual + CALIB_MAX_UP, Math.max(manual - CALIB_MAX_DOWN, raw));
+    const maintenance = Math.round(bounded / 10) * 10;
+
+    // Basis (auf die Sport addiert wird) = Erhaltung − Ziel-Defizit. Die Tages-Untergrenze
+    // liegt am Grundumsatz der Waage (Schutz vor RED-S an Ruhetagen), aber nie über der
+    // Erhaltung – sonst wäre an Ruhetagen ein Überschuss geplant. Die Untergrenze greift nur
+    // an Tagen mit wenig Sport; an Sporttagen bleibt das Ziel-Defizit voll erhalten.
+    const bmr = [...bodyMeasurements].reverse().find(m => m.bmr)?.bmr || 0;
+    const restBase = Math.round(Math.max(maintenance - manualRules.referenceDeficit, CALIB_ABS_FLOOR));
+    const minDaily = Math.round(Math.max(restBase, Math.min(bmr, maintenance)));
+
+    return {
+      active: true, maintenance, restBase, minDaily,
+      tdee: Math.round(tdee), avgIntake: Math.round(avgIntake), avgSport: Math.round(avgSport),
+      slopeKgWeek: slope * 7, trackedDays: tracked.length, weightCount: pts.length,
+      clamped: Math.round(raw / 10) * 10 !== maintenance,
+      bmrFloor: minDaily > restBase ? minDaily : null,
+    };
+  }, [manualRules.autoCalibrate, manualRules.maintenanceBase, manualRules.referenceDeficit,
+      history, bodyMeasurements, trainingDays, todayKey]);
+
+  // Alle Berechnungen lesen `rules`; bei aktiver Kalibrierung mit den kalibrierten Werten.
+  // Der Einstellungsdialog bearbeitet weiterhin `manualRules` (Fallback ohne Kalibrierung).
+  const rules = useMemo(() => (calibration.active
+    ? { ...manualRules, maintenanceBase: calibration.maintenance, kcalRestBase: calibration.restBase, kcalMinDaily: calibration.minDaily }
+    : manualRules), [manualRules, calibration]);
+
+  // Ältere Kopien der Ruhetags-Basis (KI-Ergebnis, Kalorienziel-Rechner) dürfen die
+  // Kalibrierung nicht übersteuern.
+  const pickRestBase = (fallback) => (calibration.active ? rules.kcalRestBase : fallback);
+
   const saveRules = (next) => {
-    setRules(next);
+    setManualRules(next);
     localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(next));
     setRulesErrors([]);
     // KI-Cache invalidieren, da Basis/Makro-Regeln sich geändert haben könnten
@@ -438,9 +528,9 @@ const KalorienTracker = () => {
   // (kJ-priorisierte) Strava-Kalorien. Kein Eat-back-Tier mehr.
   const effectiveTodayGoal = useMemo(() => {
     const todayTraining = trainingDays.find(d => d.date === todayKey);
-    const restBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
+    const restBase = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
       || (calorieGoal > 0 ? calorieGoal : null)
-      || rules.kcalRestBase;
+      || rules.kcalRestBase);
     // Alle Strava-Aktivitäten heute summieren (reagiert auf neue Syncs)
     return dailyGoalFor(todayTraining, restBase);
   }, [trainingDays, todayKey, kiResult, calorieGoal, rules]);
@@ -488,7 +578,7 @@ const KalorienTracker = () => {
     trainingDays.forEach(t => { stravaMap[t.date] = t; });
 
     // Tabellenzeilen aufbauen (landscape: A4 quer für mehr Spalten)
-    const kcalBase = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || rules.kcalRestBase;
+    const kcalBase = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || rules.kcalRestBase);
     const rowGoals = []; // per-day goal for color coding
     const rows = days14.map(dateKey => {
       const meals   = history[dateKey] || [];
@@ -1284,7 +1374,7 @@ const KalorienTracker = () => {
     if (today && today.totalCalories > 0) {
       // Sporttag: Basis 1800 kcal + volle (Stufe-1-korrigierte) Strava-Kalorien.
       // Kein zusätzlicher Eat-back-Abschlag mehr – das Defizit bleibt dadurch konstant ~300 kcal.
-      const restBase  = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
+      const restBase  = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
       const rawBurn   = today.totalCalories;
       const fullRefuel = isFullRefuelDay(today);
       const usedBase  = fullRefuel ? rules.maintenanceBase : restBase;
@@ -1293,7 +1383,7 @@ const KalorienTracker = () => {
       reasonParts.push(`Trainingstag: ${adjustedGoal} kcal (${usedBase} Basis + ${trainingBonus} Strava, ${today.totalMinutes} Min)${fullRefuel ? ' · Intervall-Volltag, kein Defizit' : ''}`);
     } else {
       // Rest day – nie unter rules.kcalMinDaily (Schlaf/Regeneration)
-      adjustedGoal = capDailyGoal(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
+      adjustedGoal = capDailyGoal(pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase));
       reasonParts.push(`Ruhetag: ${adjustedGoal} kcal`);
     }
 
@@ -1534,7 +1624,7 @@ const KalorienTracker = () => {
     // hier fälschlich "nicht erfasst" für Tage mit echten Remote-Daten annehmen.
     if (!initialPullDoneRef.current) return;
 
-    const restBase  = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase;
+    const restBase  = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase);
 
     let freshHistory;
     try { freshHistory = JSON.parse(localStorage.getItem('history-data') || '{}'); } catch { return; }
@@ -1848,7 +1938,7 @@ const KalorienTracker = () => {
             bodyMeasurements,
             bodyGoals,
             trainingDays,
-            calorieGoalRest: capDailyGoal(kiResult?.kcalGoalRestDay || calorieGoal || rules.kcalRestBase),
+            calorieGoalRest: capDailyGoal(pickRestBase(kiResult?.kcalGoalRestDay || calorieGoal || rules.kcalRestBase)),
             macroGoals: kiResult,
             todayDate: todayKey,
             todayMeals,
@@ -2037,7 +2127,7 @@ const KalorienTracker = () => {
     // Vergessene Tage (< 1500 kcal echte Einträge, außer heute) → Tagesziel als Wert.
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
     // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
-    const restBase    = (kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase;
+    const restBase    = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase);
     // Erhaltungskalorien-Basis (ohne Sport) für die Defizit-Anzeige
     const tdeeNoSport = rules.maintenanceBase;
 
@@ -2507,7 +2597,7 @@ ${trainingDays.filter(d => {
               Makroziele
             </button>
             <button
-              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setRulesErrors([]); setRulesWarnings([]); setShowRulesSettings(true); }}
+              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(manualRules))); setRulesErrors([]); setRulesWarnings([]); setShowRulesSettings(true); }}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
             >
               <Settings className="w-4 h-4" />
@@ -2664,7 +2754,7 @@ ${trainingDays.filter(d => {
             {(() => {
               // Formel: Ruhetag immer kcalMinDaily (2200) kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien
               const dayStrava = trainingDays.find(d => d.date === selectedDate);
-              const restBase = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
+              const restBase = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
               const effectiveGoal = isToday ? effectiveTodayGoal : dailyGoalFor(dayStrava, restBase);
               const isOver = totals.kcal > effectiveGoal;
               return (
@@ -3096,7 +3186,7 @@ ${trainingDays.filter(d => {
               const sportKcal   = dayStrava?.totalCalories || 0;
               const netKcal     = Math.round(totals.kcal - sportKcal);
               const erhaltung   = rules.maintenanceBase + sportKcal;
-              const restBase_   = kiResult?.kcalGoalRestDay || rules.kcalRestBase;
+              const restBase_   = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
               const goal_       = isToday ? effectiveTodayGoal : dailyGoalFor(dayStrava, restBase_);
               const plannedDeficit = Math.round(erhaltung - goal_);
               const deficit     = Math.round(erhaltung - Math.round(totals.kcal));
@@ -3117,7 +3207,7 @@ ${trainingDays.filter(d => {
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Erhaltungskalorien</p>
                       <p className="text-2xl font-bold text-slate-700 mono">{erhaltung}</p>
-                      <p className="text-xs text-slate-400 mt-1">{rules.maintenanceBase} + {sportKcal} Sport</p>
+                      <p className="text-xs text-slate-400 mt-1">{rules.maintenanceBase}{calibration.active ? ' (kalibriert)' : ''} + {sportKcal} Sport</p>
                     </div>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Netto-Kalorien</p>
@@ -6277,6 +6367,40 @@ ${trainingDays.filter(d => {
               {/* Kalorienziel */}
               <div>
                 <h3 className="text-sm font-bold text-slate-700 mb-3">Kalorienziel</h3>
+                <label className="flex items-start gap-2 mb-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rulesDraft.autoCalibrate !== false}
+                    onChange={(e) => setRulesDraft({ ...rulesDraft, autoCalibrate: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 accent-emerald-600"
+                  />
+                  <span className="text-sm text-slate-700">
+                    Erhaltung selbst kalibrieren
+                    <span className="block text-xs text-slate-400">
+                      Aus Gewichtstrend und erfasster Aufnahme der letzten 6 Wochen. Ersetzt Erhaltung, Basis und Untergrenze; das Ziel-Defizit bleibt.
+                    </span>
+                  </span>
+                </label>
+                {rulesDraft.autoCalibrate !== false && (
+                  <div className={`mb-3 rounded-xl border px-3 py-2 text-xs ${calibration.active ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                    {calibration.active ? (
+                      <>
+                        <p className="font-semibold">Kalibriert: Erhaltung {calibration.maintenance} kcal + Sport · Basis {calibration.restBase} kcal · Untergrenze {calibration.minDaily} kcal</p>
+                        <p className="mt-0.5">
+                          Ø Aufnahme {calibration.avgIntake} kcal ({calibration.trackedDays} Tage) · Gewicht {calibration.slopeKgWeek >= 0 ? '+' : ''}{calibration.slopeKgWeek.toFixed(2)} kg/Woche ({calibration.weightCount} Messungen)
+                          {' '}→ Verbrauch ≈ {calibration.tdee} kcal, davon Ø {calibration.avgSport} kcal Sport
+                        </p>
+                        {calibration.clamped && <p className="mt-0.5">Begrenzt auf −{CALIB_MAX_DOWN}/+{CALIB_MAX_UP} kcal um die manuelle Erhaltung.</p>}
+                        <p className="mt-0.5">Die kalibrierte Erhaltung gleicht auch überschätzte Sportkalorien aus und kann daher niedriger wirken als dein reiner Ruheverbrauch.</p>
+                        {calibration.bmrFloor && <p className="mt-0.5">Untergrenze am Grundumsatz der Waage ({calibration.bmrFloor} kcal) – an Tagen mit wenig Sport fällt das Defizit dadurch kleiner aus.</p>}
+                      </>
+                    ) : (
+                      <p>{manualRules.autoCalibrate === false
+                        ? 'Wird nach dem Speichern berechnet.'
+                        : `Noch nicht aktiv: ${calibration.reason}. Bis dahin gelten die Werte unten.`}</p>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     { key: 'kcalRestBase',    label: 'Basis (Ruhe/Sport)' },
