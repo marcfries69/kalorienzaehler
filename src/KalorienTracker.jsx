@@ -3314,11 +3314,14 @@ ${trainingDays.filter(d => {
                 };
               };
 
+              // Muskeln: Muskelmasse (kg) statt Muskel-%, da das Gerät/die Waage des Nutzers
+              // musclePct nicht liefert (immer null), muscleMassKg aber schon – sonst
+              // verschwindet die Muskel-Kachel hier komplett (gefiltert über != null).
               const items = [
-                { key: 'weight',      label: 'Gewicht',  unit: 'kg', lower: false },
-                { key: 'fatPct',      label: 'Fett',     unit: '%',  lower: true  },
-                { key: 'musclePct',   label: 'Muskeln',  unit: '%',  lower: false },
-                { key: 'visceralFat', label: 'VF',       unit: '',   lower: true  },
+                { key: 'weight',        label: 'Gewicht',  unit: 'kg', lower: false },
+                { key: 'fatPct',        label: 'Fett',     unit: '%',  lower: true  },
+                { key: 'muscleMassKg',  label: 'Muskeln',  unit: 'kg', lower: false },
+                { key: 'visceralFat',   label: 'VF',       unit: '',   lower: true  },
               ].filter(i => latest[i.key] != null);
 
               if (items.length === 0) return null;
