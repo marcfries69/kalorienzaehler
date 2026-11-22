@@ -3291,18 +3291,28 @@ ${trainingDays.filter(d => {
             {/* ── Body snapshot ── */}
             {bodyMeasurements.length > 0 && (() => {
               const latest = bodyMeasurements[bodyMeasurements.length - 1];
-              const prev   = bodyMeasurements.length > 1 ? bodyMeasurements[bodyMeasurements.length - 2] : null;
+              // Nicht jede Messung enthält jeden Wert (z.B. Schnellwiegung ohne Körperanalyse,
+              // oder ein Gerät liefert manche Felder nur unregelmäßig). Pro Kennzahl daher die
+              // jeweils letzten beiden Messungen suchen, die DIESEN Wert tatsächlich enthalten,
+              // statt pauschal von der insgesamt letzten Messung auszugehen – sonst verschwindet
+              // eine Kachel komplett, nur weil die neueste Messung dieses eine Feld nicht hatte.
+              const lastWithKey = (key, count) => {
+                const found = [];
+                for (let i = bodyMeasurements.length - 1; i >= 0 && found.length < count; i--) {
+                  if (bodyMeasurements[i][key] != null) found.push(bodyMeasurements[i]);
+                }
+                return found;
+              };
 
-              const trend = (key, lowerIsBetter = false) => {
-                if (!prev || latest[key] == null || prev[key] == null) return null;
-                const diff = latest[key] - prev[key];
+              const trend = (cur, prv, key, lowerIsBetter = false) => {
+                if (!prv) return null;
+                const diff = cur[key] - prv[key];
                 if (Math.abs(diff) < 0.05) return { arrow: '→', color: 'text-slate-400' };
                 const good = lowerIsBetter ? diff < 0 : diff > 0;
                 return { arrow: diff > 0 ? '↑' : '↓', color: good ? 'text-emerald-500' : 'text-rose-500' };
               };
 
-              const goalDelta = (key, unit = '', lowerIsBetter = false) => {
-                const val  = latest[key];
+              const goalDelta = (val, key, unit = '', lowerIsBetter = false) => {
                 const goal = bodyGoals[key];
                 if (val == null || goal == null) return null;
                 const diff = val - goal;
@@ -3315,14 +3325,16 @@ ${trainingDays.filter(d => {
               };
 
               // Muskeln: Muskelmasse (kg) statt Muskel-%, da das Gerät/die Waage des Nutzers
-              // musclePct nicht liefert (immer null), muscleMassKg aber schon – sonst
-              // verschwindet die Muskel-Kachel hier komplett (gefiltert über != null).
+              // musclePct nicht liefert (immer null), muscleMassKg aber schon.
               const items = [
                 { key: 'weight',        label: 'Gewicht',  unit: 'kg', lower: false },
                 { key: 'fatPct',        label: 'Fett',     unit: '%',  lower: true  },
                 { key: 'muscleMassKg',  label: 'Muskeln',  unit: 'kg', lower: false },
                 { key: 'visceralFat',   label: 'VF',       unit: '',   lower: true  },
-              ].filter(i => latest[i.key] != null);
+              ].map(def => {
+                const [cur, prv] = lastWithKey(def.key, 2);
+                return cur ? { ...def, cur, prv } : null;
+              }).filter(Boolean);
 
               if (items.length === 0) return null;
 
@@ -3341,14 +3353,15 @@ ${trainingDays.filter(d => {
                     </button>
                   </div>
                   <div className="grid grid-cols-4 gap-2">
-                    {items.map(({ key, label, unit, lower }) => {
-                      const t = trend(key, lower);
-                      const d = goalDelta(key, unit, lower);
+                    {items.map(({ key, label, unit, lower, cur, prv }) => {
+                      const val = cur[key];
+                      const t = trend(cur, prv, key, lower);
+                      const d = goalDelta(val, key, unit, lower);
                       return (
                         <div key={key} className="text-center">
                           <p className="text-xs text-slate-400 font-medium mb-0.5">{label}</p>
                           <div className="flex items-center justify-center gap-0.5">
-                            <span className="text-base font-bold text-slate-800 mono">{latest[key]}</span>
+                            <span className="text-base font-bold text-slate-800 mono">{val}</span>
                             <span className="text-xs text-slate-400">{unit}</span>
                             {t && <span className={`text-xs font-bold ${t.color}`}>{t.arrow}</span>}
                           </div>
