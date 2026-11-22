@@ -2833,23 +2833,34 @@ ${trainingDays.filter(d => {
                     ? 'text-amber-700'
                     : 'text-rose-700';
                 return (
-                  <div className="grid grid-cols-3 gap-2 mb-3">
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400 uppercase tracking-wide">Erhaltung</p>
-                      <p className="text-sm font-bold text-slate-700 mono">{erhaltung}</p>
+                  <div className="mb-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400 uppercase tracking-wide">Erhaltung ohne Sport</p>
+                        <p className="text-sm font-bold text-slate-700 mono">{rules.maintenanceBase}</p>
+                        {calibration.active && <p className="text-[10px] text-slate-400">kalibriert</p>}
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400 uppercase tracking-wide">Erhaltung mit Sport</p>
+                        <p className="text-sm font-bold text-slate-700 mono">{erhaltung}</p>
+                        <p className="text-[10px] text-slate-400">+{dayBurn} Sport</p>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400 uppercase tracking-wide">Defizit im Tagesziel</p>
+                        <p className={`text-sm font-bold mono ${tone(plannedDeficit)}`}>
+                          {plannedDeficit >= 0 ? '−' : '+'}{Math.abs(plannedDeficit)}
+                        </p>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400 uppercase tracking-wide">Aktuelles Defizit</p>
+                        <p className={`text-sm font-bold mono ${tone(actualDeficit)}`}>
+                          {actualDeficit >= 0 ? '−' : '+'}{Math.abs(actualDeficit)}
+                        </p>
+                      </div>
                     </div>
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400 uppercase tracking-wide">Geplantes Defizit</p>
-                      <p className={`text-sm font-bold mono ${tone(plannedDeficit)}`}>
-                        {plannedDeficit >= 0 ? '−' : '+'}{Math.abs(plannedDeficit)}
-                      </p>
-                    </div>
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400 uppercase tracking-wide">Aktuelles Defizit</p>
-                      <p className={`text-sm font-bold mono ${tone(actualDeficit)}`}>
-                        {actualDeficit >= 0 ? '−' : '+'}{Math.abs(actualDeficit)}
-                      </p>
-                    </div>
+                    <p className="text-[10px] text-slate-400 text-center mt-1.5">
+                      Tagesziel {effectiveGoal} = Erhaltung mit Sport {erhaltung} {plannedDeficit >= 0 ? '−' : '+'} {Math.abs(plannedDeficit)} {plannedDeficit >= 0 ? 'Defizit' : 'Überschuss'}
+                    </p>
                   </div>
                 );
               })()}
