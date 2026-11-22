@@ -4401,7 +4401,7 @@ ${trainingDays.filter(d => {
           // For body-comp KPIs use the last entry that actually has body-comp data
           // (avoids showing "–" when the most recent entry is weight-only)
           const latestBodyComp = [...bodyMeasurements].reverse().find(
-            m => m.fatPct != null || m.visceralFat != null || m.musclePct != null
+            m => m.fatPct != null || m.visceralFat != null || m.muscleMassKg != null
           ) || latest;
           const nutritionDays = Object.keys(history).length;
 
@@ -4423,7 +4423,7 @@ ${trainingDays.filter(d => {
           const metrics = [
             { key: 'weight',      label: 'Gewicht',     unit: 'kg', icon: <Scale     className="w-4 h-4" />, lowerIsBetter: false, color: 'from-blue-50 to-blue-100 border-blue-200',       textColor: 'text-blue-700' },
             { key: 'fatPct',      label: 'Fettanteil',  unit: '%',  icon: <Flame      className="w-4 h-4" />, lowerIsBetter: true,  color: 'from-orange-50 to-orange-100 border-orange-200', textColor: 'text-orange-700' },
-            { key: 'musclePct',   label: 'Muskeln',     unit: '%',  icon: <Dumbbell   className="w-4 h-4" />, lowerIsBetter: false, color: 'from-emerald-50 to-emerald-100 border-emerald-200', textColor: 'text-emerald-700' },
+            { key: 'muscleMassKg', label: 'Muskeln',     unit: 'kg', icon: <Dumbbell   className="w-4 h-4" />, lowerIsBetter: false, color: 'from-emerald-50 to-emerald-100 border-emerald-200', textColor: 'text-emerald-700' },
             { key: 'visceralFat', label: 'Viszerales Fett', unit: '', icon: <Target  className="w-4 h-4" />, lowerIsBetter: true,  color: 'from-rose-50 to-rose-100 border-rose-200',       textColor: 'text-rose-700' },
           ];
 
