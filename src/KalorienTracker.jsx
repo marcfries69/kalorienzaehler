@@ -136,13 +136,12 @@ const compressImage = (file, maxDim = 1024, quality = 0.75) => new Promise((reso
 // editierbare Defaults. Siehe Einstellungs-Modal (showRulesSettings) für die UI dazu.
 const RULES_STORAGE_KEY = 'app-rules';
 const DEFAULT_RULES = {
-  kcalRestBase:    1900, // Basis Ruhetag/Sporttag (vor Floor/Sport-Zuschlag) — bewusst = kcalMinDaily,
-                         // damit das Defizit an JEDEM Tag (auch mit Sport-Zuschlag) konstant bei
-                         // referenceDeficit (200) bleibt, statt an Trainingstagen höher auszufallen.
-  kcalMinDaily:    1900, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
-  maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung)
+  kcalRestBase:    1800, // Tagesziel ohne Sport (Basis, auf die Sport addiert wird) — bewusst = kcalMinDaily
+  kcalMinDaily:    1800, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
+  maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung, Fallback ohne Kalibrierung)
   referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
-  autoCalibrate:   true, // Erhaltung aus Gewichtstrend + Aufnahme ableiten (ersetzt maintenanceBase/kcalRestBase/kcalMinDaily)
+  autoCalibrate:   true, // Erhaltung aus Körperzusammensetzung + Aufnahme ableiten (ersetzt maintenanceBase)
+  calibrateGoal:   false, // Tagesziel zusätzlich aus der Kalibrierung ableiten (Erhaltung − Ziel-Defizit) statt fester Basis
   stravaDeflation:  25,  // % Abzug auf Strava-Kalorien ohne kJ-Wert (Überschätzungskorrektur)
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
@@ -163,7 +162,7 @@ const DEFAULT_RULES = {
 // Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen Werten stehen.
 // Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind erneute
 // manuelle Anpassungen wieder verbindlich.
-const RULES_MIGRATION_VERSION = 7;
+const RULES_MIGRATION_VERSION = 8;
 
 // Selbstkalibrierung der Erhaltung: Fenster und Mindestdatenmenge, ab der das Ergebnis
 // belastbar genug ist (6 Wochen glätten Wasserschwankungen der Waage weitgehend aus).
@@ -171,7 +170,11 @@ const CALIB_WINDOW_DAYS  = 42;
 const CALIB_MIN_TRACKED  = 20;
 const CALIB_MIN_WEIGHTS  = 8;
 const CALIB_MIN_SPAN     = 21;
-const KCAL_PER_KG        = 7700;
+const KCAL_PER_KG        = 7700; // Gewebe-Mischwert, nur ohne Körperfett-Messung
+// Energiegehalt nach Hall (2008): Fettmasse ist energiedicht, Magermasse (Muskel, Wasser,
+// Glykogen) kaum – Muskelaufbau durchs Gym darf daher nicht wie Fettzunahme zählen.
+const KCAL_PER_KG_FAT    = 9440;
+const KCAL_PER_KG_LEAN   = 1816;
 const CALIB_MAX_DOWN     = 600; // max. Abweichung von der manuellen Erhaltung nach unten/oben
 const CALIB_MAX_UP       = 400;
 const CALIB_ABS_FLOOR    = 1500;
@@ -180,6 +183,15 @@ const loadRules = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(RULES_STORAGE_KEY) || 'null');
     if (!saved) return { ...DEFAULT_RULES, __migrationVersion: RULES_MIGRATION_VERSION };
+    if (saved.__migrationVersion === 7) {
+      // v8: nur das Tagesziel ohne Sport auf 1800 setzen, übrige Werte unangetastet lassen
+      saved.kcalRestBase       = DEFAULT_RULES.kcalRestBase;
+      saved.kcalMinDaily       = DEFAULT_RULES.kcalMinDaily;
+      saved.__migrationVersion = RULES_MIGRATION_VERSION;
+      localStorage.setItem('calorie-goal', String(DEFAULT_RULES.kcalRestBase));
+      localStorage.removeItem('ki-result');
+      localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(saved));
+    }
     if (!(saved.__migrationVersion >= RULES_MIGRATION_VERSION)) {
       saved.maintenanceBase   = DEFAULT_RULES.maintenanceBase;
       saved.kcalMinDaily      = DEFAULT_RULES.kcalMinDaily;
@@ -411,21 +423,37 @@ const KalorienTracker = () => {
       return { active: false, reason: `erst ${tracked.length} voll erfasste Tage in 6 Wochen (mind. ${CALIB_MIN_TRACKED})` };
     }
 
-    const pts = bodyMeasurements
-      .filter(m => m.weight != null && m.date >= startKey && m.date <= todayKey)
-      .map(m => [(new Date(m.date + 'T12:00:00') - start) / 86400000, m.weight]);
-    const span = pts.length ? Math.max(...pts.map(p => p[0])) - Math.min(...pts.map(p => p[0])) : 0;
-    if (pts.length < CALIB_MIN_WEIGHTS || span < CALIB_MIN_SPAN) {
-      return { active: false, reason: `zu wenige Gewichtsmessungen (${pts.length}, mind. ${CALIB_MIN_WEIGHTS} über ${CALIB_MIN_SPAN} Tage)` };
+    const inWindow = bodyMeasurements.filter(m => m.weight != null && m.date >= startKey && m.date <= todayKey);
+    const dayOf = (m) => (new Date(m.date + 'T12:00:00') - start) / 86400000;
+    const spanOf = (ms) => (ms.length ? Math.max(...ms.map(dayOf)) - Math.min(...ms.map(dayOf)) : 0);
+    if (inWindow.length < CALIB_MIN_WEIGHTS || spanOf(inWindow) < CALIB_MIN_SPAN) {
+      return { active: false, reason: `zu wenige Gewichtsmessungen (${inWindow.length}, mind. ${CALIB_MIN_WEIGHTS} über ${CALIB_MIN_SPAN} Tage)` };
+    }
+    const slopeOf = (ms, val) => {
+      const pts = ms.map(m => [dayOf(m), val(m)]);
+      const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+      const my = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+      return pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0)
+           / pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0); // pro Tag
+    };
+    const slope = slopeOf(inWindow, m => m.weight);
+
+    // Energiebilanz aus der Körperzusammensetzung: Fett- und Magermasse getrennt bewerten,
+    // damit Muskelaufbau (wenig Energie pro kg) nicht als Kalorienüberschuss gewertet wird.
+    // Ohne genügend Körperfett-Messungen Rückfall auf den Gewebe-Mischwert.
+    const withFat = inWindow.filter(m => m.fatPct != null);
+    let energySlope, fatSlope = null, leanSlope = null;
+    if (withFat.length >= CALIB_MIN_WEIGHTS && spanOf(withFat) >= CALIB_MIN_SPAN) {
+      fatSlope  = slopeOf(withFat, m => m.weight * m.fatPct / 100);
+      leanSlope = slopeOf(withFat, m => m.weight * (1 - m.fatPct / 100));
+      energySlope = fatSlope * KCAL_PER_KG_FAT + leanSlope * KCAL_PER_KG_LEAN;
+    } else {
+      energySlope = slope * KCAL_PER_KG;
     }
 
-    const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
-    const my = pts.reduce((s, p) => s + p[1], 0) / pts.length;
-    const slope = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0)
-                / pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0); // kg/Tag
     const avgIntake = tracked.reduce((s, d) => s + d.kcal, 0) / tracked.length;
     const avgSport  = tracked.reduce((s, d) => s + d.sport, 0) / tracked.length;
-    const tdee      = avgIntake - slope * KCAL_PER_KG;
+    const tdee      = avgIntake - energySlope;
     const raw       = tdee - avgSport;
     const manual    = manualRules.maintenanceBase;
     const bounded   = Math.min(manual + CALIB_MAX_UP, Math.max(manual - CALIB_MAX_DOWN, raw));
@@ -442,18 +470,27 @@ const KalorienTracker = () => {
     return {
       active: true, maintenance, restBase, minDaily,
       tdee: Math.round(tdee), avgIntake: Math.round(avgIntake), avgSport: Math.round(avgSport),
-      slopeKgWeek: slope * 7, trackedDays: tracked.length, weightCount: pts.length,
+      slopeKgWeek: slope * 7, trackedDays: tracked.length, weightCount: inWindow.length,
+      fatKgWeek: fatSlope != null ? fatSlope * 7 : null, leanKgWeek: leanSlope != null ? leanSlope * 7 : null,
+      balance: Math.round(energySlope),
       clamped: Math.round(raw / 10) * 10 !== maintenance,
       bmrFloor: minDaily > restBase ? minDaily : null,
     };
   }, [manualRules.autoCalibrate, manualRules.maintenanceBase, manualRules.referenceDeficit,
       history, bodyMeasurements, trainingDays, todayKey]);
 
-  // Alle Berechnungen lesen `rules`; bei aktiver Kalibrierung mit den kalibrierten Werten.
-  // Der Einstellungsdialog bearbeitet weiterhin `manualRules` (Fallback ohne Kalibrierung).
-  const rules = useMemo(() => (calibration.active
-    ? { ...manualRules, maintenanceBase: calibration.maintenance, kcalRestBase: calibration.restBase, kcalMinDaily: calibration.minDaily }
-    : manualRules), [manualRules, calibration]);
+  // Alle Berechnungen lesen `rules`; bei aktiver Kalibrierung mit der kalibrierten Erhaltung.
+  // Das Tagesziel (Basis/Untergrenze) bleibt fest, außer calibrateGoal ist eingeschaltet.
+  // Der Einstellungsdialog bearbeitet weiterhin `manualRules`.
+  const rules = useMemo(() => {
+    if (!calibration.active) return manualRules;
+    const next = { ...manualRules, maintenanceBase: calibration.maintenance };
+    if (manualRules.calibrateGoal) {
+      next.kcalRestBase = calibration.restBase;
+      next.kcalMinDaily = calibration.minDaily;
+    }
+    return next;
+  }, [manualRules, calibration]);
 
   // Ältere Kopien der Ruhetags-Basis (KI-Ergebnis, Kalorienziel-Rechner) dürfen die
   // Kalibrierung nicht übersteuern.
@@ -520,8 +557,10 @@ const KalorienTracker = () => {
   const isIntervalActivity = (a) => /vo2|intervall|interval|hiit|schwelle|threshold/i.test(a?.name || '');
   const isFullRefuelDay = (training) =>
     (training?.activities || []).some(isIntervalActivity);
+  // Intervall-Volltag: mindestens die normale Basis – liegt die (kalibrierte) Erhaltung
+  // darunter, bekäme ein VO2max-Tag sonst weniger als ein gewöhnlicher Trainingstag.
   const dailyGoalFor = (training, restBase) =>
-    capDailyGoal((isFullRefuelDay(training) ? rules.maintenanceBase : restBase) + sportKcalCredit(training));
+    capDailyGoal((isFullRefuelDay(training) ? Math.max(rules.maintenanceBase, restBase) : restBase) + sportKcalCredit(training));
 
   // ── Auto-computed effective daily goal ───────────────────────────────────────
   // Formel: Ruhetag immer kcalMinDaily (2200) kcal. Sporttag: Basis 1800 kcal + volle
@@ -1377,7 +1416,7 @@ const KalorienTracker = () => {
       const restBase  = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
       const rawBurn   = today.totalCalories;
       const fullRefuel = isFullRefuelDay(today);
-      const usedBase  = fullRefuel ? rules.maintenanceBase : restBase;
+      const usedBase  = fullRefuel ? Math.max(rules.maintenanceBase, restBase) : restBase;
       trainingBonus = sportKcalCredit(today);
       adjustedGoal  = dailyGoalFor(today, restBase);
       reasonParts.push(`Trainingstag: ${adjustedGoal} kcal (${usedBase} Basis + ${trainingBonus} Strava, ${today.totalMinutes} Min)${fullRefuel ? ' · Intervall-Volltag, kein Defizit' : ''}`);
@@ -5061,7 +5100,7 @@ ${trainingDays.filter(d => {
                             <p className={`text-xl font-bold ${todayFullRefuel ? 'text-violet-700' : 'text-emerald-700'}`}>{todayGoal}</p>
                             <p className={`text-xs ${todayFullRefuel ? 'text-violet-500' : 'text-emerald-500'}`}>
                               {todayFullRefuel
-                                ? `Intervall-Volltag · ${rules.maintenanceBase} + ${todayEatback} kcal Strava, kein Defizit`
+                                ? `Intervall-Volltag · ${Math.max(rules.maintenanceBase, base)} + ${todayEatback} kcal Strava, kein Defizit`
                                 : todayBurn > 0 ? `${base} + ${todayEatback} kcal Strava (−25% Überschätzungs-Korrektur)` : `${restGoal} kcal · kein Training`}
                             </p>
                           </div>
@@ -6388,22 +6427,56 @@ ${trainingDays.filter(d => {
                   <span className="text-sm text-slate-700">
                     Erhaltung selbst kalibrieren
                     <span className="block text-xs text-slate-400">
-                      Aus Gewichtstrend und erfasster Aufnahme der letzten 6 Wochen. Ersetzt Erhaltung, Basis und Untergrenze; das Ziel-Defizit bleibt.
+                      Aus Körperzusammensetzung und erfasster Aufnahme der letzten 6 Wochen. Fettzunahme zählt mit 9.440 kcal/kg, Zunahme an Magermasse (Muskelaufbau) nur mit 1.816 kcal/kg.
                     </span>
                   </span>
                 </label>
                 {rulesDraft.autoCalibrate !== false && (
+                  <label className="flex items-start gap-2 mb-3 ml-6 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!rulesDraft.calibrateGoal}
+                      onChange={(e) => setRulesDraft({ ...rulesDraft, calibrateGoal: e.target.checked })}
+                      className="mt-0.5 w-4 h-4 accent-emerald-600"
+                    />
+                    <span className="text-sm text-slate-700">
+                      Tagesziel daraus ableiten
+                      <span className="block text-xs text-slate-400">
+                        Basis = kalibrierte Erhaltung − Ziel-Defizit. Aus: feste Basis und Untergrenze unten gelten.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {rulesDraft.autoCalibrate !== false && (
                   <div className={`mb-3 rounded-xl border px-3 py-2 text-xs ${calibration.active ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
                     {calibration.active ? (
                       <>
-                        <p className="font-semibold">Kalibriert: Erhaltung {calibration.maintenance} kcal + Sport · Basis {calibration.restBase} kcal · Untergrenze {calibration.minDaily} kcal</p>
+                        <p className="font-semibold">
+                          Kalibriert: Erhaltung {calibration.maintenance} kcal + Sport
+                          {manualRules.calibrateGoal && ` · Basis ${calibration.restBase} kcal · Untergrenze ${calibration.minDaily} kcal`}
+                        </p>
                         <p className="mt-0.5">
                           Ø Aufnahme {calibration.avgIntake} kcal ({calibration.trackedDays} Tage) · Gewicht {calibration.slopeKgWeek >= 0 ? '+' : ''}{calibration.slopeKgWeek.toFixed(2)} kg/Woche ({calibration.weightCount} Messungen)
-                          {' '}→ Verbrauch ≈ {calibration.tdee} kcal, davon Ø {calibration.avgSport} kcal Sport
+                        </p>
+                        {calibration.fatKgWeek != null && (
+                          <p className="mt-0.5">
+                            davon Fett {calibration.fatKgWeek >= 0 ? '+' : ''}{calibration.fatKgWeek.toFixed(2)} kg/Woche, Magermasse {calibration.leanKgWeek >= 0 ? '+' : ''}{calibration.leanKgWeek.toFixed(2)} kg/Woche
+                          </p>
+                        )}
+                        <p className="mt-0.5">
+                          Energiebilanz {calibration.balance >= 0 ? '+' : ''}{calibration.balance} kcal/Tag → Verbrauch ≈ {calibration.tdee} kcal, davon Ø {calibration.avgSport} kcal Sport
+                          {calibration.fatKgWeek == null && ' (ohne Körperfett-Messungen: Mischwert 7.700 kcal/kg)'}
                         </p>
                         {calibration.clamped && <p className="mt-0.5">Begrenzt auf −{CALIB_MAX_DOWN}/+{CALIB_MAX_UP} kcal um die manuelle Erhaltung.</p>}
                         <p className="mt-0.5">Die kalibrierte Erhaltung gleicht auch überschätzte Sportkalorien aus und kann daher niedriger wirken als dein reiner Ruheverbrauch.</p>
-                        {calibration.bmrFloor && <p className="mt-0.5">Untergrenze am Grundumsatz der Waage ({calibration.bmrFloor} kcal) – an Tagen mit wenig Sport fällt das Defizit dadurch kleiner aus.</p>}
+                        {manualRules.calibrateGoal && calibration.bmrFloor && <p className="mt-0.5">Untergrenze am Grundumsatz der Waage ({calibration.bmrFloor} kcal) – an Tagen mit wenig Sport fällt das Defizit dadurch kleiner aus.</p>}
+                        {!manualRules.calibrateGoal && rules.kcalRestBase > calibration.maintenance - manualRules.referenceDeficit && (
+                          <p className="mt-0.5 font-medium">
+                            Feste Basis {rules.kcalRestBase} kcal enthält aktuell {calibration.maintenance - rules.kcalRestBase >= 0
+                              ? `nur ${calibration.maintenance - rules.kcalRestBase} kcal Defizit`
+                              : `${rules.kcalRestBase - calibration.maintenance} kcal Überschuss`} (Ziel {manualRules.referenceDeficit}).
+                          </p>
+                        )}
                       </>
                     ) : (
                       <p>{manualRules.autoCalibrate === false
@@ -6414,7 +6487,7 @@ ${trainingDays.filter(d => {
                 )}
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { key: 'kcalRestBase',    label: 'Basis (Ruhe/Sport)' },
+                    { key: 'kcalRestBase',    label: 'Tagesziel ohne Sport' },
                     { key: 'kcalMinDaily',    label: 'Untergrenze' },
                     { key: 'maintenanceBase', label: 'Erhaltungskalorien' },
                     { key: 'referenceDeficit', label: 'Ziel-Defizit' },
