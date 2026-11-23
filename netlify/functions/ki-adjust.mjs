@@ -30,12 +30,14 @@ export default async (req) => {
       macroGoals,
       userProfile      = {},
       rules            = {},
+      weightMonitor    = null,
     } = await req.json();
 
     // Konfigurierbare Regeln (Frontend-Einstellungen), mit robusten Defaults
-    const kcalRestBase    = rules.kcalRestBase    ?? 1900;
-    const minDaily         = rules.kcalMinDaily    ?? 1900;
-    const maintenanceBase = rules.maintenanceBase ?? 2100;
+    const kcalRestBase    = rules.kcalRestBase    ?? 1800;
+    const minDaily         = rules.kcalMinDaily    ?? 1800;
+    const maintenanceBase = rules.maintenanceBase ?? 1900;
+    const referenceDeficit = rules.referenceDeficit ?? (maintenanceBase - kcalRestBase);
     const macroRest  = rules.macroRest  ?? { protein: 150, carbs: 150, fat: 66 };
     const macroTrain = rules.macroTrain ?? { protein: 150, carbs: 200, fat: 85 };
     const macroCycle = rules.macroCycle ?? { protein: 150, carbs: 300, fat: 85 };
@@ -93,7 +95,13 @@ export default async (req) => {
 
     let bmr  = null;
 
-    if (bw && height) {
+    // Feste Werte aus den Regeln (Grundumsatz + NEAT) haben Vorrang vor jeder Schätzung –
+    // sonst zeigt das KI-Panel eine andere Erhaltung als der Rest der App.
+    const fixedModel = rules.bmrBase > 0 && rules.neatBase >= 0;
+
+    if (fixedModel) {
+      bmr = rules.bmrBase;
+    } else if (bw && height) {
       bmr = gender === 'female'
         ? 10*bw + 6.25*height - 5*age - 161
         : 10*bw + 6.25*height - 5*age + 5;
@@ -109,7 +117,10 @@ export default async (req) => {
     let tef  = null;
     let tdeeBase = null;   // BMR + NEAT + TEF (Ruhetag, ohne Strava-Sport)
 
-    if (bmr) {
+    if (fixedModel) {
+      neat     = Math.round(rules.neatBase);
+      tdeeBase = Math.round(bmr + neat);            // Erhaltung = Grundumsatz + NEAT (ohne TEF)
+    } else if (bmr) {
       const neatMultiplier = Math.max(0.10, (actFactor - 1.05) * 0.85);
       neat     = Math.round(bmr * neatMultiplier);
       tef      = Math.round((bmr + neat) * 0.10);  // TEF ≈ 10% der aufgenommenen Energie
@@ -117,11 +128,19 @@ export default async (req) => {
     }
 
     // ── 5. RED-S risk assessment ──────────────────────────────────────────────
-    const rapidWeightLoss  = weightTrend  !== null && weightTrend  < -1.0;
-    const muscleLoss       = muscleTrend  !== null && muscleTrend  < -0.3;
-    const muscleLossLong   = muscleTrend3 !== null && muscleTrend3 < -0.5;
+    // Bevorzugt der Gewichts-Monitor des Frontends (Regression über 4 Wochen, Fett-/Mager-
+    // masse getrennt); der Vergleich zweier Einzelmessungen schwankt zu stark mit Wasser.
+    const monitorReady     = weightMonitor && weightMonitor.status !== 'insufficient';
     const highTrainingLoad = activeDays7 >= 5 || avgDailyBurn7 > 400;
-    const redSRisk = (muscleLoss || muscleLossLong) && (rapidWeightLoss || highTrainingLoad);
+    const rapidWeightLoss  = monitorReady ? weightMonitor.status === 'too_fast'
+                                          : weightTrend !== null && weightTrend < -1.0;
+    const muscleLoss       = monitorReady ? weightMonitor.status === 'lean_loss'
+                                          : muscleTrend !== null && muscleTrend < -0.3;
+    const muscleLossLong   = !monitorReady && muscleTrend3 !== null && muscleTrend3 < -0.5;
+    const redSRisk = monitorReady
+      ? !!weightMonitor.redSRisk
+      : (muscleLoss || muscleLossLong) && (rapidWeightLoss || highTrainingLoad);
+    const fmtKg = (v) => (v == null ? '–' : `${v >= 0 ? '+' : ''}${v.toFixed(2)} kg/Woche`);
 
     // ── 6. Konfigurierbare Kalorie- und Makro-Vorgaben (aus Regel-Einstellungen) ──
     // Ruhetag: immer kcalMinDaily. Sporttag: Basis kcalRestBase + volle (Stufe-1-korrigierte)
@@ -164,19 +183,26 @@ export default async (req) => {
 
 ## PROFIL
 - Alter: ${age} Jahre | Gewicht: ${bw ?? '–'} kg | Größe: ${height ?? '–'} cm
-- BMR: ${bmr ? Math.round(bmr) : '–'} kcal | TDEE Ruhetag: ${tdeeBase ?? '–'} kcal
+- Grundumsatz: ${bmr ? Math.round(bmr) : '–'} kcal${fixedModel ? ` + NEAT ${neat} kcal` : ''} = Erhaltung ohne Sport ${tdeeBase ?? '–'} kcal
 
 ## FESTE ZIELE (nicht ändern, aus Regel-Einstellungen)
-- Ruhetag: immer ${minDaily} kcal | Trainingstag: Basis ${kcalRestBase} kcal + volle (-${rules.stravaDeflation ?? 25}% korrigierte) Strava-kcal, kein Eat-back-Abschlag
-- Tagesziel-Untergrenze ${minDaily} kcal (Schlaf/Regeneration), keine Obergrenze
-- Strava-Kalorien werden pauschal um ${rules.stravaDeflation ?? 25}% nach unten korrigiert (Überschätzung) – dient nur der Genauigkeit, nicht dem Defizit
-- Defizit = Erhaltungskalorien (${maintenanceBase} + Sport-kcal) − Tagesziel, bleibt dadurch konstant ~${maintenanceBase - kcalRestBase} kcal (Ruhetag ~${maintenanceBase - minDaily} kcal)
+- Tagesziel = Erhaltung − ${referenceDeficit} kcal Defizit: ohne Sport ${kcalRestBase} kcal, an Sporttagen ${kcalRestBase} kcal + Sportkalorien (Strava, kJ 1:1, sonst −${rules.stravaDeflation ?? 25}%)
+- Tagesziel-Untergrenze ${minDaily} kcal, keine Obergrenze; VO2max/Schwelle-Tage ohne Defizit
+- Die erfasste Aufnahme kann unvollständig sein (der Nutzer vermutet, früher nicht alles erfasst zu haben) – bewerte den Erfolg daher am Gewichtsverlauf, nicht an der erfassten Aufnahme.
+- ZIEL: Gewicht soll über die Zeit LEICHT sinken (Soll bei ${referenceDeficit} kcal/Tag ≈ ${fmtKg(-(referenceDeficit * 7) / 7700)}), aber NICHT schneller als ~0,7 % Körpergewicht pro Woche – schneller Verlust ist bei diesem Trainingsumfang ein RED-S-Risiko.
+
+## GEWICHTS-MONITOR (Regression über 4 Wochen)
+${monitorReady
+  ? `- Gewicht ${fmtKg(weightMonitor.kgWeek)} (${weightMonitor.pctWeek.toFixed(2)} %/Woche), Fett ${fmtKg(weightMonitor.fatKgWeek)}, Magermasse ${fmtKg(weightMonitor.leanKgWeek)}
+- Status: ${weightMonitor.status} – ${weightMonitor.message}`
+  : `- ${weightMonitor?.message ?? 'Keine Monitor-Daten'}`}
+
+## MAKRO-ZIELE
 - Makros Ruhetag/Gehen:   Protein ${macroRest.protein}g | Carbs ${macroRest.carbs}g | Fett ${macroRest.fat}g
 - Makros Laufen/Kraft:    Protein ${macroTrain.protein}g | Carbs ${macroTrain.carbs}g | Fett ${macroTrain.fat}g
 - Makros Zone2 ≥90min/VO2max-Rad: Protein ${macroCycle.protein}g | Carbs ${macroCycle.carbs}g | Fett ${macroCycle.fat}g
-- TDEE-Differenz Ruhetag: ${deficitVsTdee !== null ? (deficitVsTdee > 0 ? '+' : '') + deficitVsTdee + ' kcal vs. TDEE' : '–'}
 
-## KÖRPER-TREND
+## LETZTE MESSUNGEN
 - Gewicht: ${weightTrend !== null ? (weightTrend>0?'+':'')+weightTrend+' kg' : '–'} (3 Mess.: ${weightTrend3 !== null ? (weightTrend3>0?'+':'')+weightTrend3+' kg' : '–'})
 - Muskeln: ${muscleTrend !== null ? (muscleTrend>0?'+':'')+muscleTrend+'%' : '–'} | Viszeralfett: ${visceralTrend !== null ? (visceralTrend>0?'+':'')+visceralTrend : '–'}
 - KFA: ${latest?.fatPct ?? '–'}% → Ziel ${bodyGoals.fatPct ?? '–'}% | Gewicht: ${latest?.weight ?? '–'} kg → Ziel ${bodyGoals.weight ?? '–'} kg
@@ -191,8 +217,8 @@ ${last7.length > 0 ? '- Details: '+trainingDetails : ''}
 
 Antworte NUR mit diesem JSON:
 {
-  "warnings": [<max. 3 deutsche Hinweise bei kritischen Trends, sonst leer>],
-  "adjustmentReason": "<1-2 Sätze: Bewertung des aktuellen Fortschritts und ob die Ziele passen>"
+  "warnings": [<max. 3 deutsche Hinweise bei kritischen Trends (zu schneller Verlust, Magermasse-Verlust, RED-S, deutliche Zunahme), sonst leer>],
+  "adjustmentReason": "<1-2 Sätze: Liegt der Gewichtsverlauf im Ziel (leicht sinkend)? Konkrete Empfehlung: Ziel beibehalten, anheben (bei zu schnellem Verlust) oder Erfassung prüfen bzw. Defizit leicht erhöhen (bei Stagnation/Zunahme)>"
 }`;
 
     const geminiRes = await fetch('https://api.anthropic.com/v1/messages', {

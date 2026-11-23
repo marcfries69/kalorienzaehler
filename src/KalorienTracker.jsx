@@ -136,12 +136,14 @@ const compressImage = (file, maxDim = 1024, quality = 0.75) => new Promise((reso
 // editierbare Defaults. Siehe Einstellungs-Modal (showRulesSettings) für die UI dazu.
 const RULES_STORAGE_KEY = 'app-rules';
 const DEFAULT_RULES = {
-  kcalRestBase:    1800, // Tagesziel ohne Sport (Basis, auf die Sport addiert wird) — bewusst = kcalMinDaily
-  kcalMinDaily:    1800, // Tagesziel-Untergrenze (Schlaf/Regeneration), keine Obergrenze
-  maintenanceBase: 2100, // Erhaltungskalorien ohne Sport (Defizit-Berechnung, Fallback ohne Kalibrierung)
-  referenceDeficit: 200, // Ziel-Defizit/Tag (Anzeige-Referenzlinie)
-  autoCalibrate:   true, // Erhaltung aus Körperzusammensetzung + Aufnahme ableiten (ersetzt maintenanceBase)
-  calibrateGoal:   false, // Tagesziel zusätzlich aus der Kalibrierung ableiten (Erhaltung − Ziel-Defizit) statt fester Basis
+  // Kalorienmodell: Erhaltung = Grundumsatz + NEAT, Tagesziel ohne Sport = Erhaltung − Defizit.
+  // maintenanceBase, kcalRestBase und kcalMinDaily werden daraus abgeleitet (withDerivedKcal).
+  bmrBase:          1550, // Grundumsatz
+  neatBase:          350, // Alltagsbewegung ohne Sport
+  referenceDeficit:  100, // Tagesdefizit
+  maintenanceBase:  1900, // = bmrBase + neatBase
+  kcalRestBase:     1800, // = maintenanceBase − referenceDeficit (Basis, auf die Sport addiert wird)
+  kcalMinDaily:     1800, // = kcalRestBase (Tagesziel-Untergrenze)
   stravaDeflation:  25,  // % Abzug auf Strava-Kalorien ohne kJ-Wert (Überschätzungskorrektur)
   macroRest:  { protein: 150, carbs: 150, fat: 66 }, // Ruhetag/Gehen
   macroTrain: { protein: 150, carbs: 200, fat: 85 }, // Laufen/Kraft
@@ -162,37 +164,104 @@ const DEFAULT_RULES = {
 // Default-Vergleich nie erfasst und bleibt sonst dauerhaft auf falschen Werten stehen.
 // Über eine Versionsnummer läuft das genau EINMAL pro Gerät; danach sind erneute
 // manuelle Anpassungen wieder verbindlich.
-const RULES_MIGRATION_VERSION = 8;
+const RULES_MIGRATION_VERSION = 9;
 
-// Selbstkalibrierung der Erhaltung: Fenster und Mindestdatenmenge, ab der das Ergebnis
-// belastbar genug ist (6 Wochen glätten Wasserschwankungen der Waage weitgehend aus).
-const CALIB_WINDOW_DAYS  = 42;
-const CALIB_MIN_TRACKED  = 20;
-const CALIB_MIN_WEIGHTS  = 8;
-const CALIB_MIN_SPAN     = 21;
-const KCAL_PER_KG        = 7700; // Gewebe-Mischwert, nur ohne Körperfett-Messung
-// Energiegehalt nach Hall (2008): Fettmasse ist energiedicht, Magermasse (Muskel, Wasser,
-// Glykogen) kaum – Muskelaufbau durchs Gym darf daher nicht wie Fettzunahme zählen.
-const KCAL_PER_KG_FAT    = 9440;
-const KCAL_PER_KG_LEAN   = 1816;
-const CALIB_MAX_DOWN     = 600; // max. Abweichung von der manuellen Erhaltung nach unten/oben
-const CALIB_MAX_UP       = 400;
-const CALIB_ABS_FLOOR    = 1500;
+// Erhaltung, Tagesziel ohne Sport und Untergrenze folgen immer aus Grundumsatz, NEAT und
+// Defizit – so können die drei Werte nicht mehr auseinanderlaufen.
+const withDerivedKcal = (r) => {
+  const maintenanceBase = Math.round((r.bmrBase || 0) + (r.neatBase || 0));
+  const kcalRestBase = maintenanceBase - Math.round(r.referenceDeficit || 0);
+  return { ...r, maintenanceBase, kcalRestBase, kcalMinDaily: kcalRestBase };
+};
+
+// Gewichts-Monitor: Trend der letzten 4 Wochen gegen einen Zielkorridor "leicht sinkend".
+// Zu schneller Verlust (oder Verlust an Magermasse) ist ein RED-S-Warnsignal bei hohem
+// Trainingsumfang. Grenzen in % Körpergewicht pro Woche.
+const MONITOR_WINDOW_DAYS   = 28;
+const MONITOR_MIN_WEIGHTS   = 6;
+const MONITOR_MIN_SPAN      = 14;
+const MONITOR_MAX_LOSS_PCT  = 0.7;  // schneller als 0,7 %/Woche → zu schnell
+const MONITOR_MIN_LOSS_PCT  = 0.05; // langsamer → stagniert
+const MONITOR_GAIN_PCT      = 0.15; // Zunahme darüber → steigend
+const MONITOR_LEAN_LOSS_KG  = 0.2;  // Magermasse-Verlust pro Woche, ab dem gewarnt wird
+const KCAL_PER_KG           = 7700; // Energiegehalt Körpergewebe (Mischwert) für den Soll-Trend
+
+// ── Gewichts-Monitor ──────────────────────────────────────────────────────────
+// Die erfasste Aufnahme ist nicht vollständig genug, um daraus den Verbrauch abzuleiten.
+// Stattdessen wird nur der Gewichtsverlauf beobachtet: Bei Tagesziel = Erhaltung − Defizit
+// soll das Gewicht leicht sinken, aber nicht schnell (RED-S-Schutz bei hohem Trainings-
+// umfang). Trend per Regression über 4 Wochen, Fett- und Magermasse getrennt.
+const computeWeightMonitor = (bodyMeasurements, referenceDeficit, todayKey) => {
+  const start = new Date(); start.setDate(start.getDate() - (MONITOR_WINDOW_DAYS - 1));
+  const startKey = toDateKey(start);
+  const ms = bodyMeasurements.filter(m => m.weight != null && m.date >= startKey && m.date <= todayKey);
+  const dayOf  = (m) => (new Date(m.date + 'T12:00:00') - start) / 86400000;
+  const spanOf = (list) => (list.length ? Math.max(...list.map(dayOf)) - Math.min(...list.map(dayOf)) : 0);
+  const expectedKgWeek = -(referenceDeficit * 7) / KCAL_PER_KG;
+  if (ms.length < MONITOR_MIN_WEIGHTS || spanOf(ms) < MONITOR_MIN_SPAN) {
+    return {
+      status: 'insufficient', weightCount: ms.length, expectedKgWeek,
+      message: `Noch zu wenige Messungen für einen Trend (${ms.length} in 4 Wochen, mind. ${MONITOR_MIN_WEIGHTS} über ${MONITOR_MIN_SPAN} Tage).`,
+    };
+  }
+  const slopeOf = (list, val) => {
+    const pts = list.map(m => [dayOf(m), val(m)]);
+    const mx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+    const my = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+    return pts.reduce((a, p) => a + (p[0] - mx) * (p[1] - my), 0)
+         / pts.reduce((a, p) => a + (p[0] - mx) ** 2, 0);
+  };
+  const kgWeek    = slopeOf(ms, m => m.weight) * 7;
+  const avgWeight = ms.reduce((a, m) => a + m.weight, 0) / ms.length;
+  const pctWeek   = (kgWeek / avgWeight) * 100;
+  const withFat   = ms.filter(m => m.fatPct != null);
+  const hasComp   = withFat.length >= MONITOR_MIN_WEIGHTS && spanOf(withFat) >= MONITOR_MIN_SPAN;
+  const fatKgWeek  = hasComp ? slopeOf(withFat, m => m.weight * m.fatPct / 100) * 7 : null;
+  const leanKgWeek = hasComp ? slopeOf(withFat, m => m.weight * (1 - m.fatPct / 100)) * 7 : null;
+  const fmt = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2).replace('.', ',')} kg/Woche`;
+
+  let status, message;
+  if (pctWeek < -MONITOR_MAX_LOSS_PCT) {
+    status = 'too_fast';
+    message = `Gewicht sinkt zu schnell (${fmt(kgWeek)}) – RED-S-Risiko. Tagesziel um 150–250 kcal anheben, vor allem an Trainingstagen.`;
+  } else if (kgWeek < 0 && leanKgWeek != null && leanKgWeek < -MONITOR_LEAN_LOSS_KG) {
+    status = 'lean_loss';
+    message = `Magermasse sinkt (${fmt(leanKgWeek)}) – Defizit verkleinern, Protein und Kohlenhydrate rund ums Training sichern.`;
+  } else if (pctWeek <= -MONITOR_MIN_LOSS_PCT) {
+    status = 'on_track';
+    message = `Im Zielkorridor: Gewicht sinkt leicht (${fmt(kgWeek)}).`;
+  } else if (pctWeek <= MONITOR_GAIN_PCT) {
+    status = 'stalled';
+    message = `Gewicht stabil (${fmt(kgWeek)}) – leicht sinkend ist noch nicht erreicht. Weiter konsequent erfassen; bleibt es so, Defizit leicht erhöhen.`;
+  } else {
+    status = 'gaining';
+    message = `Gewicht steigt (${fmt(kgWeek)}) – vermutlich werden nicht alle Kalorien erfasst oder Grundumsatz/NEAT sind zu hoch angesetzt.`;
+  }
+  return {
+    status, message, kgWeek, pctWeek, fatKgWeek, leanKgWeek, expectedKgWeek,
+    weightCount: ms.length, avgWeight,
+    redSRisk: status === 'too_fast' || status === 'lean_loss',
+  };
+};
 
 const loadRules = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(RULES_STORAGE_KEY) || 'null');
-    if (!saved) return { ...DEFAULT_RULES, __migrationVersion: RULES_MIGRATION_VERSION };
-    if (saved.__migrationVersion === 7) {
-      // v8: nur das Tagesziel ohne Sport auf 1800 setzen, übrige Werte unangetastet lassen
-      saved.kcalRestBase       = DEFAULT_RULES.kcalRestBase;
-      saved.kcalMinDaily       = DEFAULT_RULES.kcalMinDaily;
+    if (!saved) return withDerivedKcal({ ...DEFAULT_RULES, __migrationVersion: RULES_MIGRATION_VERSION });
+    if (saved.__migrationVersion === 7 || saved.__migrationVersion === 8) {
+      // v9: Kalorienmodell Grundumsatz + NEAT − Defizit, Selbstkalibrierung entfernt.
+      // Übrige Regeln (Makros, Ballaststoffe, …) bleiben unangetastet.
+      saved.bmrBase            = DEFAULT_RULES.bmrBase;
+      saved.neatBase           = DEFAULT_RULES.neatBase;
+      saved.referenceDeficit   = DEFAULT_RULES.referenceDeficit;
       saved.__migrationVersion = RULES_MIGRATION_VERSION;
       localStorage.setItem('calorie-goal', String(DEFAULT_RULES.kcalRestBase));
       localStorage.removeItem('ki-result');
-      localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(saved));
+      localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(withDerivedKcal(saved)));
     }
     if (!(saved.__migrationVersion >= RULES_MIGRATION_VERSION)) {
+      saved.bmrBase           = DEFAULT_RULES.bmrBase;
+      saved.neatBase          = DEFAULT_RULES.neatBase;
       saved.maintenanceBase   = DEFAULT_RULES.maintenanceBase;
       saved.kcalMinDaily      = DEFAULT_RULES.kcalMinDaily;
       saved.kcalRestBase      = DEFAULT_RULES.kcalRestBase;
@@ -209,14 +278,16 @@ const loadRules = () => {
     }
     delete saved.useKjForPowerRides; // Regel jetzt fest: kJ immer 1:1, kein Vergleich mehr
     delete saved.satFatMaxPct; // ersetzt durch satFatGoal (feste Gramm-Grenze statt Prozent)
-    return {
+    delete saved.autoCalibrate; // Selbstkalibrierung entfernt (Aufnahme-Daten unvollständig)
+    delete saved.calibrateGoal;
+    return withDerivedKcal({
       ...DEFAULT_RULES,
       ...saved,
       macroRest:  { ...DEFAULT_RULES.macroRest,  ...(saved.macroRest  || {}) },
       macroTrain: { ...DEFAULT_RULES.macroTrain, ...(saved.macroTrain || {}) },
       macroCycle: { ...DEFAULT_RULES.macroCycle, ...(saved.macroCycle || {}) },
-    };
-  } catch { return { ...DEFAULT_RULES }; }
+    });
+  } catch { return withDerivedKcal({ ...DEFAULT_RULES }); }
 };
 
 // ── Mikronährstoff-Tagesziele (DGE-Referenzwerte) ────────────────────────────
@@ -387,118 +458,21 @@ const KalorienTracker = () => {
   const [todayOptimized, setTodayOptimized] = useState(null); // { kcalGoal, bonus, trainingToday, reason }
 
   // ── Regel-Einstellungen ───────────────────────────────────────────────────────
-  const [manualRules, setManualRules] = useState(loadRules);
+  const [rules, setRules] = useState(loadRules);
   const [showRulesSettings, setShowRulesSettings] = useState(false);
   const [rulesDraft, setRulesDraft] = useState(null);
   const [validatingRules, setValidatingRules] = useState(false);
   const [rulesErrors, setRulesErrors] = useState([]);
   const [rulesWarnings, setRulesWarnings] = useState([]);
 
-  // ── Selbstkalibrierende Erhaltung ────────────────────────────────────────────
-  // Die feste Annahme (maintenanceBase + Sport) lag über 4 Monate ~225 kcal/Tag über dem
-  // tatsächlichen Verbrauch: Ø Defizit laut App ~200 kcal, Gewicht trotzdem leicht steigend.
-  // Daher wird die Erhaltung ohne Sport aus den echten Daten der letzten 6 Wochen abgeleitet:
-  //   Verbrauch = Ø Aufnahme voll erfasster Tage − Gewichtstrend × 7700 kcal/kg
-  //   Erhaltung = Verbrauch − Ø Sportgutschrift derselben Tage
-  // So gleicht das Modell alle Fehlerquellen (Brutto-Sportkalorien, Schätzwerte,
-  // Erfassungslücken) automatisch aus, statt eine einzelne Annahme zu korrigieren.
-  const calibration = useMemo(() => {
-    if (manualRules.autoCalibrate === false) return { active: false, reason: 'deaktiviert' };
-
-    const end = new Date(); end.setDate(end.getDate() - 1); // heute ist noch unvollständig
-    const start = new Date(end); start.setDate(end.getDate() - (CALIB_WINDOW_DAYS - 1));
-    const startKey = toDateKey(start), endKey = toDateKey(end);
-
-    const trainMap = {};
-    trainingDays.forEach(t => { trainMap[t.date] = t; });
-    const tracked = [];
-    for (const [date, meals] of Object.entries(history)) {
-      if (date < startKey || date > endKey || !Array.isArray(meals)) continue;
-      if (meals.some(m => m.isExcluded)) continue;
-      const kcal = meals.filter(m => !m.isAutoCorrection).reduce((s, m) => s + (m.kcal || 0), 0);
-      if (kcal < 1500) continue; // unvollständig erfasst – Aufnahme unbekannt
-      tracked.push({ kcal, sport: Math.round(trainMap[date]?.totalCalories || 0) });
-    }
-    if (tracked.length < CALIB_MIN_TRACKED) {
-      return { active: false, reason: `erst ${tracked.length} voll erfasste Tage in 6 Wochen (mind. ${CALIB_MIN_TRACKED})` };
-    }
-
-    const inWindow = bodyMeasurements.filter(m => m.weight != null && m.date >= startKey && m.date <= todayKey);
-    const dayOf = (m) => (new Date(m.date + 'T12:00:00') - start) / 86400000;
-    const spanOf = (ms) => (ms.length ? Math.max(...ms.map(dayOf)) - Math.min(...ms.map(dayOf)) : 0);
-    if (inWindow.length < CALIB_MIN_WEIGHTS || spanOf(inWindow) < CALIB_MIN_SPAN) {
-      return { active: false, reason: `zu wenige Gewichtsmessungen (${inWindow.length}, mind. ${CALIB_MIN_WEIGHTS} über ${CALIB_MIN_SPAN} Tage)` };
-    }
-    const slopeOf = (ms, val) => {
-      const pts = ms.map(m => [dayOf(m), val(m)]);
-      const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
-      const my = pts.reduce((s, p) => s + p[1], 0) / pts.length;
-      return pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0)
-           / pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0); // pro Tag
-    };
-    const slope = slopeOf(inWindow, m => m.weight);
-
-    // Energiebilanz aus der Körperzusammensetzung: Fett- und Magermasse getrennt bewerten,
-    // damit Muskelaufbau (wenig Energie pro kg) nicht als Kalorienüberschuss gewertet wird.
-    // Ohne genügend Körperfett-Messungen Rückfall auf den Gewebe-Mischwert.
-    const withFat = inWindow.filter(m => m.fatPct != null);
-    let energySlope, fatSlope = null, leanSlope = null;
-    if (withFat.length >= CALIB_MIN_WEIGHTS && spanOf(withFat) >= CALIB_MIN_SPAN) {
-      fatSlope  = slopeOf(withFat, m => m.weight * m.fatPct / 100);
-      leanSlope = slopeOf(withFat, m => m.weight * (1 - m.fatPct / 100));
-      energySlope = fatSlope * KCAL_PER_KG_FAT + leanSlope * KCAL_PER_KG_LEAN;
-    } else {
-      energySlope = slope * KCAL_PER_KG;
-    }
-
-    const avgIntake = tracked.reduce((s, d) => s + d.kcal, 0) / tracked.length;
-    const avgSport  = tracked.reduce((s, d) => s + d.sport, 0) / tracked.length;
-    const tdee      = avgIntake - energySlope;
-    const raw       = tdee - avgSport;
-    const manual    = manualRules.maintenanceBase;
-    const bounded   = Math.min(manual + CALIB_MAX_UP, Math.max(manual - CALIB_MAX_DOWN, raw));
-    const maintenance = Math.round(bounded / 10) * 10;
-
-    // Basis (auf die Sport addiert wird) = Erhaltung − Ziel-Defizit. Die Tages-Untergrenze
-    // liegt am Grundumsatz der Waage (Schutz vor RED-S an Ruhetagen), aber nie über der
-    // Erhaltung – sonst wäre an Ruhetagen ein Überschuss geplant. Die Untergrenze greift nur
-    // an Tagen mit wenig Sport; an Sporttagen bleibt das Ziel-Defizit voll erhalten.
-    const bmr = [...bodyMeasurements].reverse().find(m => m.bmr)?.bmr || 0;
-    const restBase = Math.round(Math.max(maintenance - manualRules.referenceDeficit, CALIB_ABS_FLOOR));
-    const minDaily = Math.round(Math.max(restBase, Math.min(bmr, maintenance)));
-
-    return {
-      active: true, maintenance, restBase, minDaily,
-      tdee: Math.round(tdee), avgIntake: Math.round(avgIntake), avgSport: Math.round(avgSport),
-      slopeKgWeek: slope * 7, trackedDays: tracked.length, weightCount: inWindow.length,
-      fatKgWeek: fatSlope != null ? fatSlope * 7 : null, leanKgWeek: leanSlope != null ? leanSlope * 7 : null,
-      balance: Math.round(energySlope),
-      clamped: Math.round(raw / 10) * 10 !== maintenance,
-      bmrFloor: minDaily > restBase ? minDaily : null,
-    };
-  }, [manualRules.autoCalibrate, manualRules.maintenanceBase, manualRules.referenceDeficit,
-      history, bodyMeasurements, trainingDays, todayKey]);
-
-  // Alle Berechnungen lesen `rules`; bei aktiver Kalibrierung mit der kalibrierten Erhaltung.
-  // Das Tagesziel (Basis/Untergrenze) bleibt fest, außer calibrateGoal ist eingeschaltet.
-  // Der Einstellungsdialog bearbeitet weiterhin `manualRules`.
-  const rules = useMemo(() => {
-    if (!calibration.active) return manualRules;
-    const next = { ...manualRules, maintenanceBase: calibration.maintenance };
-    if (manualRules.calibrateGoal) {
-      next.kcalRestBase = calibration.restBase;
-      next.kcalMinDaily = calibration.minDaily;
-    }
-    return next;
-  }, [manualRules, calibration]);
-
-  // Ältere Kopien der Ruhetags-Basis (KI-Ergebnis, Kalorienziel-Rechner) dürfen die
-  // Kalibrierung nicht übersteuern.
-  const pickRestBase = (fallback) => (calibration.active ? rules.kcalRestBase : fallback);
+  const weightMonitor = useMemo(
+    () => computeWeightMonitor(bodyMeasurements, rules.referenceDeficit, todayKey),
+    [bodyMeasurements, rules.referenceDeficit, todayKey]);
 
   const saveRules = (next) => {
-    setManualRules(next);
-    localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(next));
+    const derived = withDerivedKcal(next);
+    setRules(derived);
+    localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(derived));
     setRulesErrors([]);
     // KI-Cache invalidieren, da Basis/Makro-Regeln sich geändert haben könnten
     localStorage.removeItem('ki-result');
@@ -567,9 +541,7 @@ const KalorienTracker = () => {
   // (kJ-priorisierte) Strava-Kalorien. Kein Eat-back-Tier mehr.
   const effectiveTodayGoal = useMemo(() => {
     const todayTraining = trainingDays.find(d => d.date === todayKey);
-    const restBase = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null)
-      || (calorieGoal > 0 ? calorieGoal : null)
-      || rules.kcalRestBase);
+    const restBase = rules.kcalRestBase;
     // Alle Strava-Aktivitäten heute summieren (reagiert auf neue Syncs)
     return dailyGoalFor(todayTraining, restBase);
   }, [trainingDays, todayKey, kiResult, calorieGoal, rules]);
@@ -617,7 +589,7 @@ const KalorienTracker = () => {
     trainingDays.forEach(t => { stravaMap[t.date] = t; });
 
     // Tabellenzeilen aufbauen (landscape: A4 quer für mehr Spalten)
-    const kcalBase = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || rules.kcalRestBase);
+    const kcalBase = rules.kcalRestBase;
     const rowGoals = []; // per-day goal for color coding
     const rows = days14.map(dateKey => {
       const meals   = history[dateKey] || [];
@@ -1350,6 +1322,7 @@ const KalorienTracker = () => {
             activityFactor: freshCalcData.activity ? +freshCalcData.activity : 1.375,
           },
           rules,
+          weightMonitor: computeWeightMonitor(freshBodyMeasurements, rules.referenceDeficit, toDateKey(new Date())),
         }),
       });
       const json = await res.json();
@@ -1413,7 +1386,7 @@ const KalorienTracker = () => {
     if (today && today.totalCalories > 0) {
       // Sporttag: Basis 1800 kcal + volle (Stufe-1-korrigierte) Strava-Kalorien.
       // Kein zusätzlicher Eat-back-Abschlag mehr – das Defizit bleibt dadurch konstant ~300 kcal.
-      const restBase  = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
+      const restBase  = rules.kcalRestBase;
       const rawBurn   = today.totalCalories;
       const fullRefuel = isFullRefuelDay(today);
       const usedBase  = fullRefuel ? Math.max(rules.maintenanceBase, restBase) : restBase;
@@ -1422,7 +1395,7 @@ const KalorienTracker = () => {
       reasonParts.push(`Trainingstag: ${adjustedGoal} kcal (${usedBase} Basis + ${trainingBonus} Strava, ${today.totalMinutes} Min)${fullRefuel ? ' · Intervall-Volltag, kein Defizit' : ''}`);
     } else {
       // Rest day – nie unter rules.kcalMinDaily (Schlaf/Regeneration)
-      adjustedGoal = capDailyGoal(pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase));
+      adjustedGoal = capDailyGoal(rules.kcalRestBase);
       reasonParts.push(`Ruhetag: ${adjustedGoal} kcal`);
     }
 
@@ -1663,7 +1636,7 @@ const KalorienTracker = () => {
     // hier fälschlich "nicht erfasst" für Tage mit echten Remote-Daten annehmen.
     if (!initialPullDoneRef.current) return;
 
-    const restBase  = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase);
+    const restBase  = rules.kcalRestBase;
 
     let freshHistory;
     try { freshHistory = JSON.parse(localStorage.getItem('history-data') || '{}'); } catch { return; }
@@ -1977,7 +1950,7 @@ const KalorienTracker = () => {
             bodyMeasurements,
             bodyGoals,
             trainingDays,
-            calorieGoalRest: capDailyGoal(pickRestBase(kiResult?.kcalGoalRestDay || calorieGoal || rules.kcalRestBase)),
+            calorieGoalRest: capDailyGoal(rules.kcalRestBase),
             macroGoals: kiResult,
             todayDate: todayKey,
             todayMeals,
@@ -2166,7 +2139,7 @@ const KalorienTracker = () => {
     // Vergessene Tage (< 1500 kcal echte Einträge, außer heute) → Tagesziel als Wert.
     // Korrektureinträge (isAutoCorrection) werden automatisch per Backfill gesetzt und
     // hier nur zur Erkennung genutzt – der kcal-Wert steckt bereits in den meals.
-    const restBase    = pickRestBase((kiResult?.kcalGoalRestDay > 0 ? kiResult.kcalGoalRestDay : null) || calorieGoal || rules.kcalRestBase);
+    const restBase    = rules.kcalRestBase;
     // Erhaltungskalorien-Basis (ohne Sport) für die Defizit-Anzeige
     const tdeeNoSport = rules.maintenanceBase;
 
@@ -2636,7 +2609,7 @@ ${trainingDays.filter(d => {
               Makroziele
             </button>
             <button
-              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(manualRules))); setRulesErrors([]); setRulesWarnings([]); setShowRulesSettings(true); }}
+              onClick={() => { setRulesDraft(JSON.parse(JSON.stringify(rules))); setRulesErrors([]); setRulesWarnings([]); setShowRulesSettings(true); }}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white text-sm font-medium transition-all shadow-md flex items-center gap-2"
             >
               <Settings className="w-4 h-4" />
@@ -2793,7 +2766,7 @@ ${trainingDays.filter(d => {
             {(() => {
               // Formel: Ruhetag immer kcalMinDaily (2200) kcal, Sporttag: Basis 1800 kcal + Strava-Kalorien
               const dayStrava = trainingDays.find(d => d.date === selectedDate);
-              const restBase = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
+              const restBase = rules.kcalRestBase;
               const effectiveGoal = isToday ? effectiveTodayGoal : dailyGoalFor(dayStrava, restBase);
               const isOver = totals.kcal > effectiveGoal;
               return (
@@ -2877,7 +2850,7 @@ ${trainingDays.filter(d => {
                       <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
                         <p className="text-[10px] text-slate-400 uppercase tracking-wide">Erhaltung ohne Sport</p>
                         <p className="text-sm font-bold text-slate-700 mono">{rules.maintenanceBase}</p>
-                        {calibration.active && <p className="text-[10px] text-slate-400">kalibriert</p>}
+                        <p className="text-[10px] text-slate-400">{rules.bmrBase} + {rules.neatBase} NEAT</p>
                       </div>
                       <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
                         <p className="text-[10px] text-slate-400 uppercase tracking-wide">Erhaltung mit Sport</p>
@@ -2900,6 +2873,35 @@ ${trainingDays.filter(d => {
                     <p className="text-[10px] text-slate-400 text-center mt-1.5">
                       Tagesziel {effectiveGoal} = Erhaltung mit Sport {erhaltung} {plannedDeficit >= 0 ? '−' : '+'} {Math.abs(plannedDeficit)} {plannedDeficit >= 0 ? 'Defizit' : 'Überschuss'}
                     </p>
+                  </div>
+                );
+              })()}
+
+              {/* Gewichts-Monitor */}
+              {(() => {
+                const wm = weightMonitor;
+                const style = {
+                  on_track:     'bg-emerald-50 border-emerald-200 text-emerald-800',
+                  stalled:      'bg-amber-50 border-amber-200 text-amber-800',
+                  gaining:      'bg-orange-50 border-orange-200 text-orange-800',
+                  too_fast:     'bg-rose-50 border-rose-200 text-rose-800',
+                  lean_loss:    'bg-rose-50 border-rose-200 text-rose-800',
+                  insufficient: 'bg-slate-50 border-slate-200 text-slate-600',
+                }[wm.status];
+                const kg = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2).replace('.', ',')}`;
+                return (
+                  <div className={`mb-3 px-3 py-2 rounded-xl border text-xs ${style}`}>
+                    <p className="font-semibold flex items-center gap-1.5">
+                      <Scale className="w-3.5 h-3.5 flex-shrink-0" />
+                      Gewichts-Monitor (4 Wochen){wm.redSRisk ? ' · RED-S-Warnung' : ''}
+                    </p>
+                    <p className="mt-0.5 leading-snug">{wm.message}</p>
+                    {wm.status !== 'insufficient' && (
+                      <p className="mt-0.5 opacity-75">
+                        Soll bei {rules.referenceDeficit} kcal Defizit ≈ {kg(wm.expectedKgWeek)} kg/Woche · Korridor bis −{(wm.avgWeight * MONITOR_MAX_LOSS_PCT / 100).toFixed(1).replace('.', ',')} kg/Woche
+                        {wm.fatKgWeek != null && ` · Fett ${kg(wm.fatKgWeek)}, Magermasse ${kg(wm.leanKgWeek)} kg/Woche`}
+                      </p>
+                    )}
                   </div>
                 );
               })()}
@@ -3236,7 +3238,7 @@ ${trainingDays.filter(d => {
               const sportKcal   = dayStrava?.totalCalories || 0;
               const netKcal     = Math.round(totals.kcal - sportKcal);
               const erhaltung   = rules.maintenanceBase + sportKcal;
-              const restBase_   = pickRestBase(kiResult?.kcalGoalRestDay || rules.kcalRestBase);
+              const restBase_   = rules.kcalRestBase;
               const goal_       = isToday ? effectiveTodayGoal : dailyGoalFor(dayStrava, restBase_);
               const plannedDeficit = Math.round(erhaltung - goal_);
               const deficit     = Math.round(erhaltung - Math.round(totals.kcal));
@@ -3257,7 +3259,7 @@ ${trainingDays.filter(d => {
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Erhaltungskalorien</p>
                       <p className="text-2xl font-bold text-slate-700 mono">{erhaltung}</p>
-                      <p className="text-xs text-slate-400 mt-1">{rules.maintenanceBase}{calibration.active ? ' (kalibriert)' : ''} + {sportKcal} Sport</p>
+                      <p className="text-xs text-slate-400 mt-1">{rules.maintenanceBase} + {sportKcal} Sport</p>
                     </div>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
                       <p className="text-xs text-slate-500 mb-1">Netto-Kalorien</p>
@@ -6417,91 +6419,27 @@ ${trainingDays.filter(d => {
               {/* Kalorienziel */}
               <div>
                 <h3 className="text-sm font-bold text-slate-700 mb-3">Kalorienziel</h3>
-                <label className="flex items-start gap-2 mb-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={rulesDraft.autoCalibrate !== false}
-                    onChange={(e) => setRulesDraft({ ...rulesDraft, autoCalibrate: e.target.checked })}
-                    className="mt-0.5 w-4 h-4 accent-emerald-600"
-                  />
-                  <span className="text-sm text-slate-700">
-                    Erhaltung selbst kalibrieren
-                    <span className="block text-xs text-slate-400">
-                      Aus Körperzusammensetzung und erfasster Aufnahme der letzten 6 Wochen. Fettzunahme zählt mit 9.440 kcal/kg, Zunahme an Magermasse (Muskelaufbau) nur mit 1.816 kcal/kg.
-                    </span>
-                  </span>
-                </label>
-                {rulesDraft.autoCalibrate !== false && (
-                  <label className="flex items-start gap-2 mb-3 ml-6 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={!!rulesDraft.calibrateGoal}
-                      onChange={(e) => setRulesDraft({ ...rulesDraft, calibrateGoal: e.target.checked })}
-                      className="mt-0.5 w-4 h-4 accent-emerald-600"
-                    />
-                    <span className="text-sm text-slate-700">
-                      Tagesziel daraus ableiten
-                      <span className="block text-xs text-slate-400">
-                        Basis = kalibrierte Erhaltung − Ziel-Defizit. Aus: feste Basis und Untergrenze unten gelten.
-                      </span>
-                    </span>
-                  </label>
-                )}
-                {rulesDraft.autoCalibrate !== false && (
-                  <div className={`mb-3 rounded-xl border px-3 py-2 text-xs ${calibration.active ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
-                    {calibration.active ? (
-                      <>
-                        <p className="font-semibold">
-                          Kalibriert: Erhaltung {calibration.maintenance} kcal + Sport
-                          {manualRules.calibrateGoal && ` · Basis ${calibration.restBase} kcal · Untergrenze ${calibration.minDaily} kcal`}
-                        </p>
-                        <p className="mt-0.5">
-                          Ø Aufnahme {calibration.avgIntake} kcal ({calibration.trackedDays} Tage) · Gewicht {calibration.slopeKgWeek >= 0 ? '+' : ''}{calibration.slopeKgWeek.toFixed(2)} kg/Woche ({calibration.weightCount} Messungen)
-                        </p>
-                        {calibration.fatKgWeek != null && (
-                          <p className="mt-0.5">
-                            davon Fett {calibration.fatKgWeek >= 0 ? '+' : ''}{calibration.fatKgWeek.toFixed(2)} kg/Woche, Magermasse {calibration.leanKgWeek >= 0 ? '+' : ''}{calibration.leanKgWeek.toFixed(2)} kg/Woche
-                          </p>
-                        )}
-                        <p className="mt-0.5">
-                          Energiebilanz {calibration.balance >= 0 ? '+' : ''}{calibration.balance} kcal/Tag → Verbrauch ≈ {calibration.tdee} kcal, davon Ø {calibration.avgSport} kcal Sport
-                          {calibration.fatKgWeek == null && ' (ohne Körperfett-Messungen: Mischwert 7.700 kcal/kg)'}
-                        </p>
-                        {calibration.clamped && <p className="mt-0.5">Begrenzt auf −{CALIB_MAX_DOWN}/+{CALIB_MAX_UP} kcal um die manuelle Erhaltung.</p>}
-                        <p className="mt-0.5">Die kalibrierte Erhaltung gleicht auch überschätzte Sportkalorien aus und kann daher niedriger wirken als dein reiner Ruheverbrauch.</p>
-                        {manualRules.calibrateGoal && calibration.bmrFloor && <p className="mt-0.5">Untergrenze am Grundumsatz der Waage ({calibration.bmrFloor} kcal) – an Tagen mit wenig Sport fällt das Defizit dadurch kleiner aus.</p>}
-                        {!manualRules.calibrateGoal && rules.kcalRestBase > calibration.maintenance - manualRules.referenceDeficit && (
-                          <p className="mt-0.5 font-medium">
-                            Feste Basis {rules.kcalRestBase} kcal enthält aktuell {calibration.maintenance - rules.kcalRestBase >= 0
-                              ? `nur ${calibration.maintenance - rules.kcalRestBase} kcal Defizit`
-                              : `${rules.kcalRestBase - calibration.maintenance} kcal Überschuss`} (Ziel {manualRules.referenceDeficit}).
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      <p>{manualRules.autoCalibrate === false
-                        ? 'Wird nach dem Speichern berechnet.'
-                        : `Noch nicht aktiv: ${calibration.reason}. Bis dahin gelten die Werte unten.`}</p>
-                    )}
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   {[
-                    { key: 'kcalRestBase',    label: 'Tagesziel ohne Sport' },
-                    { key: 'kcalMinDaily',    label: 'Untergrenze' },
-                    { key: 'maintenanceBase', label: 'Erhaltungskalorien' },
-                    { key: 'referenceDeficit', label: 'Ziel-Defizit' },
+                    { key: 'bmrBase',          label: 'Grundumsatz' },
+                    { key: 'neatBase',         label: 'NEAT' },
+                    { key: 'referenceDeficit', label: 'Tagesdefizit' },
                   ].map(f => (
                     <div key={f.key}>
                       <label className="block text-xs font-medium text-slate-500 mb-1">{f.label} <span className="text-slate-300">kcal</span></label>
                       <input
                         type="number"
                         value={rulesDraft[f.key]}
-                        onChange={(e) => setRulesDraft({ ...rulesDraft, [f.key]: parseInt(e.target.value) || 0 })}
+                        onChange={(e) => setRulesDraft(withDerivedKcal({ ...rulesDraft, [f.key]: parseInt(e.target.value) || 0 }))}
                         className="w-full px-3 py-2 rounded-lg border-2 border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
                       />
                     </div>
                   ))}
+                </div>
+                <div className="mt-3 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600 space-y-0.5">
+                  <p>Erhaltung ohne Sport: {rulesDraft.bmrBase} + {rulesDraft.neatBase} = <b>{rulesDraft.maintenanceBase} kcal</b></p>
+                  <p>Tagesziel ohne Sport: {rulesDraft.maintenanceBase} − {rulesDraft.referenceDeficit} = <b>{rulesDraft.kcalRestBase} kcal</b> (+ Sportkalorien)</p>
+                  <p className="text-slate-400">Der Gewichts-Monitor in der Übersicht prüft, ob das Gewicht damit leicht sinkt, und warnt bei zu schnellem Verlust (RED-S).</p>
                 </div>
               </div>
 
