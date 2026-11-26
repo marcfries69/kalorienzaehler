@@ -7,6 +7,7 @@
 
 const STRAVA_TOKEN_URL = 'https://www.strava.com/oauth/token';
 const STRAVA_API       = 'https://www.strava.com/api/v3';
+const STRAVA_DETAIL_MAX = 40; // max. Detail-Abrufe pro Sync (Strava-Limit: 100 Leseanfragen/15 min)
 
 async function refreshAccessToken() {
   const body = {
@@ -106,12 +107,16 @@ export default async (req) => {
     // Fenster der letzten 95 Tage.
     let rules = {};
     let rangeFrom = null, rangeTo = null;
+    // Bereits bekannte Strava-Kalorien von Kraft-Einheiten (Aktivitäts-ID → kcal), vom Client
+    // aus dem letzten Sync mitgeschickt – spart Detail-Abrufe gegen das Strava-Rate-Limit.
+    let knownCalories = {};
     if (req.method === 'POST') {
       try {
         const body = await req.json();
         rules = body.rules || {};
         rangeFrom = body.from || null;
         rangeTo   = body.to   || null;
+        knownCalories = body.knownCalories || {};
       } catch { rules = {}; }
     }
     // rules.stravaDeflation ist der ABZUG in % (z.B. 25 = "-25%") – der Multiplikator
@@ -156,7 +161,28 @@ export default async (req) => {
       if (pageData.length < 200) break; // letzte Seite erreicht
     }
 
-    // ── 3. Aggregate per calendar day ─────────────────────────────────────────
+    // ── 3. Strava-Kalorien für Kraft-Einheiten ──────────────────────────────────
+    // Die Aktivitätsliste enthält keine Kalorien (nur die Detailansicht). Krafttraining wird
+    // ohne Strava-Wert sonst nur pauschal geschätzt – daher für neue Kraft-Einheiten die
+    // Details abrufen (begrenzt pro Sync, parallel in kleinen Gruppen).
+    const isStrength = (a) => activityCategory(a.type || a.sport_type) === 'strength';
+    const detailCalories = {};
+    const toFetch = raw
+      .filter(a => isStrength(a) && a.id != null && !(knownCalories[a.id] > 0))
+      .map(a => a.id)
+      .slice(0, STRAVA_DETAIL_MAX);
+    for (let i = 0; i < toFetch.length; i += 8) {
+      await Promise.all(toFetch.slice(i, i + 8).map(async (id) => {
+        try {
+          const r = await fetch(`${STRAVA_API}/activities/${id}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+          if (!r.ok) return;
+          const d = await r.json();
+          if (d.calories > 0) detailCalories[id] = Math.round(d.calories);
+        } catch { /* Einzelabruf fehlgeschlagen → Schätzung */ }
+      }));
+    }
+
+    // ── 4. Aggregate per calendar day ─────────────────────────────────────────
     const byDay = {};
 
     for (const a of raw) {
@@ -188,9 +214,17 @@ export default async (req) => {
       // kcal angesetzt, ohne Abzug – kJ ist eine direkte Arbeitsmessung, keine
       // Schätzung, die eine Überschätzungskorrektur bräuchte. Nur wenn kein kJ-Wert
       // vorliegt, greift die pauschale Strava-Überschätzungskorrektur.
+      // Krafttraining: voller Strava-Wert ohne Überschätzungs-Abzug.
       const kj = a.kilojoules || 0;
       let calories, caloriesSource;
-      if (isRide && kj > 0) {
+      const strengthCal = isStrength(a) ? (knownCalories[a.id] || detailCalories[a.id] || 0) : 0;
+      if (strengthCal > 0) {
+        calories = strengthCal;
+        caloriesSource = 'strava-detail';
+      } else if (isStrength(a)) {
+        calories = Math.round(rawCalories);
+        caloriesSource = 'estimated';
+      } else if (isRide && kj > 0) {
         calories = Math.round(kj);
         caloriesSource = 'kilojoules';
       } else {
@@ -208,6 +242,7 @@ export default async (req) => {
       if (isDuplicate) continue;
 
       byDay[dateKey].activities.push({
+        id:             a.id,
         name:           a.name,
         type,
         category:       cat,

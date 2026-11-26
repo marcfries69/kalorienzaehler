@@ -1230,10 +1230,20 @@ const KalorienTracker = () => {
   const syncTrainingData = async (silent = false, range = null) => {
     setTrainingSyncError(null);
     try {
+      // Bereits abgerufene Strava-Kalorien der Kraft-Einheiten mitschicken, damit der Server
+      // nur für neue Einheiten die Strava-Details abfragen muss.
+      const knownCalories = {};
+      try {
+        for (const d of JSON.parse(localStorage.getItem('training-days') || '[]')) {
+          for (const a of d.activities || []) {
+            if (a.id != null && a.caloriesSource === 'strava-detail' && a.calories > 0) knownCalories[a.id] = a.calories;
+          }
+        }
+      } catch { /* leerer Cache → Server ruft Details ab */ }
       const res  = await fetch('/.netlify/functions/sync-training', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rules, ...(range || {}) }),
+        body: JSON.stringify({ rules, ...(range || {}), knownCalories }),
       });
       let json;
       try { json = await res.json(); }
@@ -6446,7 +6456,7 @@ ${trainingDays.filter(d => {
               {/* Strava-Korrektur */}
               <div>
                 <h3 className="text-sm font-bold text-slate-700 mb-3">Strava-Korrektur</h3>
-                <p className="text-xs text-slate-400 mb-3">Liegt ein kJ-Wert vor (Power-Meter-Ride), wird dieser immer 1:1 ohne Abzug angesetzt. Nur ohne kJ-Wert greift der pauschale Abzug.</p>
+                <p className="text-xs text-slate-400 mb-3">Liegt ein kJ-Wert vor (Power-Meter-Ride), wird dieser immer 1:1 ohne Abzug angesetzt. Krafttraining zählt immer mit dem vollen Strava-Wert. Für alle übrigen Einheiten greift der pauschale Abzug.</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-500 mb-1">Pauschal-Abzug <span className="text-slate-300">%</span></label>

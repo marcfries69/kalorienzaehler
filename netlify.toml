@@ -21,6 +21,9 @@
 [functions."sync-ride"]
   timeout = 20
 
+[functions."sync-training"]
+  timeout = 26
+
 [functions."validate-rules"]
   timeout = 26
 
